@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SUSE Support Bundle Analyzer</title>
-    <link rel="stylesheet" href="/styles.css?v=20260507-4" />
+    <link rel="stylesheet" href="/styles.css?v=20260507-5" />
   </head>
   <body>
     <div class="app-shell">
@@ -123,6 +123,29 @@
       </main>
     </div>
 
-    <script src="/app.js" type="module"></script>
+    <div class="modal-backdrop" id="deleteModal" hidden>
+      <section
+        class="delete-modal"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="deleteModalTitle"
+        aria-describedby="deleteModalDescription"
+      >
+        <span class="modal-alert-mark" aria-hidden="true">!</span>
+        <div class="modal-copy">
+          <p class="eyebrow">Delete Bundle</p>
+          <h2 id="deleteModalTitle">Delete uploaded support bundle?</h2>
+          <p id="deleteModalDescription">The uploaded archive and related analysis data will be removed.</p>
+          <p class="delete-target" id="deleteModalFilename"></p>
+          <p class="modal-message" id="deleteModalMessage" role="status" aria-live="polite"></p>
+        </div>
+        <div class="modal-actions">
+          <button class="secondary-button" id="cancelDeleteButton" type="button">Cancel</button>
+          <button class="danger-button" id="confirmDeleteButton" type="button">Delete</button>
+        </div>
+      </section>
+    </div>
+
+    <script src="/app.js?v=20260507-2" type="module"></script>
   </body>
 </html>

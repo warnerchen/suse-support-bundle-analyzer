@@ -12,9 +12,16 @@ const productOptions = document.querySelector('#productOptions');
 const dropZone = document.querySelector('#dropZone');
 const reportPanel = document.querySelector('#analysisReportPanel');
 const reportContent = document.querySelector('#reportContent');
+const deleteModal = document.querySelector('#deleteModal');
+const deleteModalFilename = document.querySelector('#deleteModalFilename');
+const deleteModalMessage = document.querySelector('#deleteModalMessage');
+const cancelDeleteButton = document.querySelector('#cancelDeleteButton');
+const confirmDeleteButton = document.querySelector('#confirmDeleteButton');
 
 let maxUploadBytes = 0;
 let pollTimer = null;
+let pendingDelete = null;
+let previousFocus = null;
 
 await initialize();
 
@@ -89,7 +96,29 @@ function bindEvents() {
     const deleteButton = event.target.closest('[data-delete-bundle-id]');
 
     if (deleteButton) {
-      deleteBundle(deleteButton.dataset.deleteBundleId, deleteButton.dataset.filename);
+      openDeleteModal(deleteButton.dataset.deleteBundleId, deleteButton.dataset.filename);
+    }
+  });
+
+  cancelDeleteButton.addEventListener('click', closeDeleteModal);
+
+  confirmDeleteButton.addEventListener('click', () => {
+    if (!pendingDelete) {
+      return;
+    }
+
+    deleteBundle(pendingDelete.bundleId, pendingDelete.filename);
+  });
+
+  deleteModal.addEventListener('click', (event) => {
+    if (event.target === deleteModal && !confirmDeleteButton.disabled) {
+      closeDeleteModal();
+    }
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !deleteModal.hidden && !confirmDeleteButton.disabled) {
+      closeDeleteModal();
     }
   });
 }
@@ -317,12 +346,8 @@ async function loadReport(jobId) {
 }
 
 async function deleteBundle(bundleId, filename) {
-  const confirmed = window.confirm(`Delete uploaded bundle "${filename}" and its analysis data?`);
-
-  if (!confirmed) {
-    return;
-  }
-
+  setDeleteModalBusy(true);
+  setDeleteModalMessage('');
   setFormMessage(`Deleting ${filename}`);
 
   try {
@@ -336,6 +361,7 @@ async function deleteBundle(bundleId, filename) {
     }
 
     setFormMessage(`Deleted ${filename}`, 'success');
+    closeDeleteModal();
 
     if (reportContent.dataset.bundleId === bundleId) {
       clearReport();
@@ -343,7 +369,49 @@ async function deleteBundle(bundleId, filename) {
 
     await refreshDashboard();
   } catch (error) {
+    setDeleteModalMessage(error.message, 'error');
     setFormMessage(error.message, 'error');
+  } finally {
+    setDeleteModalBusy(false);
+  }
+}
+
+function openDeleteModal(bundleId, filename) {
+  pendingDelete = { bundleId, filename };
+  previousFocus = document.activeElement;
+  deleteModalFilename.textContent = filename;
+  setDeleteModalMessage('');
+  setDeleteModalBusy(false);
+  deleteModal.hidden = false;
+  document.body.classList.add('modal-open');
+  cancelDeleteButton.focus();
+}
+
+function closeDeleteModal() {
+  deleteModal.hidden = true;
+  document.body.classList.remove('modal-open');
+  pendingDelete = null;
+  deleteModalFilename.textContent = '';
+  setDeleteModalMessage('');
+
+  if (previousFocus) {
+    previousFocus.focus();
+    previousFocus = null;
+  }
+}
+
+function setDeleteModalBusy(isBusy) {
+  cancelDeleteButton.disabled = isBusy;
+  confirmDeleteButton.disabled = isBusy;
+  confirmDeleteButton.textContent = isBusy ? 'Deleting' : 'Delete';
+}
+
+function setDeleteModalMessage(message, state) {
+  deleteModalMessage.textContent = message;
+  deleteModalMessage.classList.remove('error');
+
+  if (state) {
+    deleteModalMessage.classList.add(state);
   }
 }
 
