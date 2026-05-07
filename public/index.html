@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SUSE Support Bundle Analyzer</title>
-    <link rel="stylesheet" href="/styles.css?v=20260507-2" />
+    <link rel="stylesheet" href="/styles.css?v=20260507-3" />
   </head>
   <body>
     <div class="app-shell">
@@ -93,17 +93,30 @@
                   <th>Product</th>
                   <th>Filename</th>
                   <th>Status</th>
+                  <th>Analysis</th>
                   <th>Size</th>
                   <th>Uploaded</th>
-                  <th>SHA-256</th>
+                  <th>Report</th>
                 </tr>
               </thead>
               <tbody id="bundleRows">
                 <tr>
-                  <td colspan="6" class="empty-cell">Loading uploads</td>
+                  <td colspan="7" class="empty-cell">Loading uploads</td>
                 </tr>
               </tbody>
             </table>
+          </div>
+        </section>
+
+        <section class="report-panel" id="analysisReportPanel" aria-labelledby="reportTitle">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Analysis</p>
+              <h2 id="reportTitle">File Index Report</h2>
+            </div>
+          </div>
+          <div id="reportContent" class="report-content">
+            <p class="empty-report">Completed analysis reports will appear here.</p>
           </div>
         </section>
       </main>

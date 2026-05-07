@@ -10,8 +10,11 @@ const refreshButton = document.querySelector('#refreshButton');
 const bundleRows = document.querySelector('#bundleRows');
 const productOptions = document.querySelector('#productOptions');
 const dropZone = document.querySelector('#dropZone');
+const reportPanel = document.querySelector('#analysisReportPanel');
+const reportContent = document.querySelector('#reportContent');
 
 let maxUploadBytes = 0;
+let pollTimer = null;
 
 await initialize();
 
@@ -29,7 +32,7 @@ async function initialize() {
     maxUploadBytes = payload.maxUploadBytes;
     uploadLimit.textContent = `Limit ${formatBytes(maxUploadBytes)}`;
     setApiStatus('Ready', 'ready');
-    await refreshBundles();
+    await refreshDashboard();
   } catch (error) {
     setApiStatus('API offline', 'error');
     setFormMessage(error.message, 'error');
@@ -73,8 +76,17 @@ function bindEvents() {
     updateSelectedFile();
   });
 
-  refreshButton.addEventListener('click', refreshBundles);
+  refreshButton.addEventListener('click', refreshDashboard);
   form.addEventListener('submit', uploadBundle);
+  bundleRows.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-report-job-id]');
+
+    if (!button) {
+      return;
+    }
+
+    loadReport(button.dataset.reportJobId);
+  });
 }
 
 function updateSelectedFile({ clearFeedback = true } = {}) {
@@ -119,13 +131,13 @@ async function uploadBundle(event) {
   try {
     const payload = await sendWithProgress('/api/bundles', formData, setProgress);
     setProgress(100);
-    setFormMessage(`Uploaded ${payload.bundle.originalFilename}`, 'success');
+    setFormMessage(`Uploaded ${payload.bundle.originalFilename}; analysis queued`, 'success');
     form.reset();
     productOptions.querySelector('input[value="longhorn"]').checked = true;
     productOptions.dispatchEvent(new Event('change'));
     updateSelectedFile();
     setProgress(100);
-    await refreshBundles();
+    await refreshDashboard();
   } catch (error) {
     setFormMessage(error.message, 'error');
     setProgress(0);
@@ -170,38 +182,221 @@ function sendWithProgress(url, body, onProgress) {
   });
 }
 
-async function refreshBundles() {
+async function refreshDashboard() {
   try {
-    const response = await fetch('/api/bundles');
-    const payload = await response.json();
+    const [bundleResponse, jobResponse] = await Promise.all([
+      fetch('/api/bundles'),
+      fetch('/api/analysis-jobs'),
+    ]);
+    const [bundlePayload, jobPayload] = await Promise.all([
+      bundleResponse.json(),
+      jobResponse.json(),
+    ]);
 
-    if (!response.ok) {
-      throw new Error(payload.error?.message ?? 'Unable to load uploads.');
+    if (!bundleResponse.ok) {
+      throw new Error(bundlePayload.error?.message ?? 'Unable to load uploads.');
     }
 
-    renderBundles(payload.bundles);
+    if (!jobResponse.ok) {
+      throw new Error(jobPayload.error?.message ?? 'Unable to load analysis jobs.');
+    }
+
+    const analysisJobs = jobPayload.analysisJobs ?? [];
+    renderBundles(bundlePayload.bundles, latestJobByBundleId(analysisJobs));
+    schedulePolling(analysisJobs);
   } catch (error) {
-    bundleRows.innerHTML = `<tr><td colspan="6" class="empty-cell">${escapeHtml(error.message)}</td></tr>`;
+    bundleRows.innerHTML = `<tr><td colspan="7" class="empty-cell">${escapeHtml(error.message)}</td></tr>`;
   }
 }
 
-function renderBundles(bundles) {
+function renderBundles(bundles, analysisJobsByBundleId) {
   if (!bundles.length) {
-    bundleRows.innerHTML = '<tr><td colspan="6" class="empty-cell">No uploads yet</td></tr>';
+    bundleRows.innerHTML = '<tr><td colspan="7" class="empty-cell">No uploads yet</td></tr>';
     return;
   }
 
   bundleRows.innerHTML = bundles
-    .map(
-      (bundle) => `
+    .map((bundle) => {
+      const job = analysisJobsByBundleId.get(bundle.id);
+      const canViewReport = job?.status === 'completed' && job.reportAvailable;
+
+      return `
         <tr>
           <td><strong>${productLabel(bundle.productType)}</strong></td>
           <td class="filename-cell">${escapeHtml(bundle.originalFilename)}</td>
           <td><span class="status-badge">${escapeHtml(bundle.uploadStatus)}</span></td>
+          <td>${renderAnalysisStatus(job)}</td>
           <td>${formatBytes(bundle.fileSize)}</td>
           <td><span class="muted">${formatDate(bundle.createdAt)}</span></td>
-          <td><div class="hash" title="${escapeHtml(bundle.sha256)}">${escapeHtml(bundle.sha256)}</div></td>
+          <td>
+            <button
+              class="report-button"
+              type="button"
+              data-report-job-id="${escapeHtml(job?.id ?? '')}"
+              ${canViewReport ? '' : 'disabled'}
+            >
+              View
+            </button>
+          </td>
         </tr>
+      `;
+    })
+    .join('');
+}
+
+function renderAnalysisStatus(job) {
+  if (!job) {
+    return '<span class="status-badge analysis-not-started">Not started</span>';
+  }
+
+  const label = `${job.status}${job.stage && job.stage !== job.status ? ` · ${job.stage}` : ''}`;
+  return `<span class="status-badge analysis-${escapeHtml(job.status)}">${escapeHtml(label)}</span>`;
+}
+
+function latestJobByBundleId(analysisJobs) {
+  const jobsByBundleId = new Map();
+
+  for (const job of analysisJobs) {
+    if (!jobsByBundleId.has(job.bundleId)) {
+      jobsByBundleId.set(job.bundleId, job);
+    }
+  }
+
+  return jobsByBundleId;
+}
+
+function schedulePolling(analysisJobs) {
+  const hasActiveJobs = analysisJobs.some((job) => job.status === 'queued' || job.status === 'running');
+
+  if (hasActiveJobs && !pollTimer) {
+    pollTimer = setInterval(refreshDashboard, 2500);
+  }
+
+  if (!hasActiveJobs && pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+async function loadReport(jobId) {
+  if (!jobId) {
+    return;
+  }
+
+  reportContent.innerHTML = '<p class="empty-report">Loading report</p>';
+  reportPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  try {
+    const response = await fetch(`/api/analysis-jobs/${jobId}/report`);
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error?.message ?? 'Unable to load analysis report.');
+    }
+
+    renderReport(payload.report);
+  } catch (error) {
+    reportContent.innerHTML = `<p class="empty-report error-text">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+function renderReport(report) {
+  const summary = report.summary;
+
+  reportContent.innerHTML = `
+    <div class="report-summary">
+      <div class="metric">
+        <span class="metric-value">${summary.fileCount}</span>
+        <span class="metric-label">Files</span>
+      </div>
+      <div class="metric">
+        <span class="metric-value">${summary.directoryCount}</span>
+        <span class="metric-label">Directories</span>
+      </div>
+      <div class="metric">
+        <span class="metric-value">${formatBytes(summary.totalBytes)}</span>
+        <span class="metric-label">Extracted Size</span>
+      </div>
+      <div class="metric">
+        <span class="metric-value">${summary.totalEntries}</span>
+        <span class="metric-label">Entries</span>
+      </div>
+    </div>
+
+    <div class="report-grid">
+      <div>
+        <h3>Archive</h3>
+        <dl class="report-dl">
+          <dt>Filename</dt>
+          <dd>${escapeHtml(report.archive.filename)}</dd>
+          <dt>Type</dt>
+          <dd>${escapeHtml(report.archive.archiveType)}</dd>
+          <dt>SHA-256</dt>
+          <dd class="mono">${escapeHtml(report.archive.sha256)}</dd>
+        </dl>
+      </div>
+      <div>
+        <h3>Top-Level Entries</h3>
+        ${renderNameCountList(report.topLevelEntries)}
+      </div>
+      <div>
+        <h3>Largest Files</h3>
+        ${renderFileList(report.largestFiles)}
+      </div>
+    </div>
+
+    <div class="report-files">
+      <h3>Indexed Files${summary.truncatedFileIndex ? ` · first ${summary.reportFileLimit}` : ''}</h3>
+      <div class="file-index-list">
+        ${renderFileIndex(report.fileIndex)}
+      </div>
+    </div>
+  `;
+}
+
+function renderNameCountList(entries) {
+  if (!entries.length) {
+    return '<p class="empty-report">No entries found</p>';
+  }
+
+  return `
+    <ul class="compact-list">
+      ${entries
+        .map((entry) => `<li><span>${escapeHtml(entry.name)}</span><strong>${entry.count}</strong></li>`)
+        .join('')}
+    </ul>
+  `;
+}
+
+function renderFileList(files) {
+  if (!files.length) {
+    return '<p class="empty-report">No files found</p>';
+  }
+
+  return `
+    <ul class="compact-list">
+      ${files
+        .map(
+          (file) =>
+            `<li><span title="${escapeHtml(file.path)}">${escapeHtml(file.path)}</span><strong>${formatBytes(file.size)}</strong></li>`,
+        )
+        .join('')}
+    </ul>
+  `;
+}
+
+function renderFileIndex(files) {
+  if (!files.length) {
+    return '<p class="empty-report">No files found</p>';
+  }
+
+  return files
+    .map(
+      (file) => `
+        <div class="file-index-row">
+          <span title="${escapeHtml(file.path)}">${escapeHtml(file.path)}</span>
+          <strong>${formatBytes(file.size)}</strong>
+        </div>
       `,
     )
     .join('');

@@ -1,5 +1,7 @@
 import http from 'node:http';
+import { ArchiveAnalyzer } from './analysis/archiveAnalyzer.js';
 import {
+  ANALYSIS_WORK_DIR,
   BUNDLE_STORAGE_DIR,
   CREATE_BUNDLE_STORAGE_DIR,
   HOST,
@@ -9,7 +11,10 @@ import {
   PRODUCT_OPTIONS,
   PUBLIC_DIR,
 } from './config.js';
+import { AnalysisJobRepository } from './repositories/analysisJobRepository.js';
+import { AnalysisReportRepository } from './repositories/analysisReportRepository.js';
 import { BundleRepository } from './repositories/bundleRepository.js';
+import { AnalysisService } from './services/analysisService.js';
 import { BundleService } from './services/bundleService.js';
 import { NfsBundleStorage } from './storage/nfsBundleStorage.js';
 import { allowedArchiveSuffixes } from './utils/archiveValidation.js';
@@ -22,8 +27,16 @@ const storage = new NfsBundleStorage(BUNDLE_STORAGE_DIR, {
 });
 const repository = new BundleRepository(METADATA_DIR);
 const bundleService = new BundleService({ repository, storage });
+const analysisService = new AnalysisService({
+  analyzer: new ArchiveAnalyzer({ workDir: ANALYSIS_WORK_DIR }),
+  bundleRepository: repository,
+  jobRepository: new AnalysisJobRepository(METADATA_DIR),
+  reportRepository: new AnalysisReportRepository(METADATA_DIR),
+  storage,
+});
 
 await storage.ensureReady();
+await analysisService.resumePendingJobs();
 
 const server = http.createServer(async (request, response) => {
   setSecurityHeaders(response);
@@ -48,6 +61,40 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === '/api/bundles' && request.method === 'GET') {
       sendJson(response, 200, { bundles: await bundleService.listBundles() });
       return;
+    }
+
+    if (url.pathname === '/api/analysis-jobs' && request.method === 'GET') {
+      sendJson(response, 200, { analysisJobs: await analysisService.listJobs() });
+      return;
+    }
+
+    if (url.pathname.startsWith('/api/analysis-jobs/') && request.method === 'GET') {
+      const parts = url.pathname.split('/').filter(Boolean);
+      const id = parts[2];
+
+      if (parts.length === 4 && parts[3] === 'report') {
+        const report = await analysisService.getReport(id);
+
+        if (!report) {
+          sendError(response, 404, 'Analysis report not found.');
+          return;
+        }
+
+        sendJson(response, 200, { report });
+        return;
+      }
+
+      if (parts.length === 3) {
+        const analysisJob = await analysisService.getJob(id);
+
+        if (!analysisJob) {
+          sendError(response, 404, 'Analysis job not found.');
+          return;
+        }
+
+        sendJson(response, 200, { analysisJob });
+        return;
+      }
     }
 
     if (url.pathname.startsWith('/api/bundles/') && request.method === 'GET') {
@@ -81,7 +128,8 @@ const server = http.createServer(async (request, response) => {
 
       const formData = await parseMultipartForm(request);
       const bundle = await bundleService.createFromFormData(formData);
-      sendJson(response, 201, { bundle });
+      const analysisJob = await analysisService.createForBundle(bundle);
+      sendJson(response, 201, { bundle, analysisJob });
       return;
     }
 

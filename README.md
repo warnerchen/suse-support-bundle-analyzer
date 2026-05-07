@@ -7,6 +7,8 @@ Current scope:
 - Upload a Support Bundle from the browser
 - Select product type: Longhorn or Harvester
 - Save the uploaded bundle to an NFS-backed filesystem path
+- Create an analysis job automatically after upload
+- Safely extract common archive formats and generate a file index report
 - Persist bundle metadata as JSON
 - Show recent uploads in the UI
 
@@ -52,6 +54,10 @@ data/
     {bundle_id}/{original_filename}
   metadata/
     bundles.json
+    analysis-jobs.json
+    analysis-reports/{job_id}.json
+  work/
+    {job_id}/extracted/
 ```
 
 The application stores only metadata in `bundles.json`. The original bundle file stays under `BUNDLE_STORAGE_DIR`.
@@ -76,7 +82,7 @@ Returns supported product options.
 
 ### `POST /api/bundles`
 
-Uploads one support bundle.
+Uploads one support bundle and creates an analysis job.
 
 Multipart form fields:
 
@@ -100,9 +106,20 @@ Supported archive suffixes:
 
 Returns recent uploaded bundle metadata.
 
+### `GET /api/analysis-jobs`
+
+Returns recent analysis jobs.
+
+### `GET /api/analysis-jobs/{id}`
+
+Returns one analysis job.
+
+### `GET /api/analysis-jobs/{id}/report`
+
+Returns the generated safe-extraction file index report for a completed analysis job.
+
 ## Next Steps
 
-- Add asynchronous analysis jobs
 - Add product-specific analyzers for Longhorn and Harvester
 - Add authentication, retention policies, and sensitive-data scanning before analysis
 - Move metadata from JSON to PostgreSQL once multiple app instances or workers are introduced

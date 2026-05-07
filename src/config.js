@@ -15,11 +15,26 @@ export const BUNDLE_STORAGE_DIR = process.env.BUNDLE_STORAGE_DIR
   ? path.resolve(process.env.BUNDLE_STORAGE_DIR)
   : path.join(DATA_DIR, 'bundles');
 export const CREATE_BUNDLE_STORAGE_DIR = !process.env.BUNDLE_STORAGE_DIR;
+export const ANALYSIS_WORK_DIR = process.env.ANALYSIS_WORK_DIR
+  ? path.resolve(process.env.ANALYSIS_WORK_DIR)
+  : path.join(DATA_DIR, 'work');
 
 export const PORT = Number.parseInt(process.env.PORT ?? '3000', 10);
 export const HOST = process.env.HOST ?? '127.0.0.1';
 export const MAX_UPLOAD_BYTES = Number.parseInt(
   process.env.MAX_UPLOAD_BYTES ?? String(1024 * 1024 * 1024),
+  10,
+);
+export const MAX_ARCHIVE_ENTRIES = Number.parseInt(
+  process.env.MAX_ARCHIVE_ENTRIES ?? '20000',
+  10,
+);
+export const MAX_EXTRACTED_BYTES = Number.parseInt(
+  process.env.MAX_EXTRACTED_BYTES ?? String(2 * 1024 * 1024 * 1024),
+  10,
+);
+export const MAX_REPORT_FILE_ENTRIES = Number.parseInt(
+  process.env.MAX_REPORT_FILE_ENTRIES ?? '5000',
   10,
 );
 

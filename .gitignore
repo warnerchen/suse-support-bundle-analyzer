@@ -3,6 +3,8 @@ node_modules/
 .env
 data/bundles/**
 data/metadata/**
+data/work/**
 !data/bundles/.gitkeep
 !data/metadata/.gitkeep
+!data/work/.gitkeep
 npm-debug.log*
