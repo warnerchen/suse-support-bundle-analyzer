@@ -7,6 +7,7 @@ import {
   MAX_EXTRACTED_BYTES,
   MAX_REPORT_FILE_ENTRIES,
 } from '../config.js';
+import { analyzeLonghornSupportBundle } from './longhornAnalyzer.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -49,6 +50,13 @@ export class ArchiveAnalyzer {
       );
     }
 
+    await updateStage('running product checks');
+    const productAnalysis = await analyzeProductBundle({
+      productType: bundle.productType,
+      extractDir,
+      index,
+    });
+
     return {
       jobId,
       bundleId: bundle.id,
@@ -63,16 +71,38 @@ export class ArchiveAnalyzer {
         storageRelativePath: bundle.storageRelativePath,
       },
       summary,
+      inventory: productAnalysis.inventory,
+      findingSummary: productAnalysis.findingSummary,
+      findings: productAnalysis.findings,
       topLevelEntries: summarizeTopLevelEntries(index),
       largestFiles: largestFiles(index, 10),
       fileIndex: index
         .filter((entry) => entry.type === 'file')
         .slice(0, MAX_REPORT_FILE_ENTRIES),
       notes: [
-        'This report is a safe extraction and file-index baseline. Product-specific analyzers can build on this job output.',
+        productAnalysis.findings?.length
+          ? 'Product-specific findings are heuristic checks and should be reviewed with the referenced source files.'
+          : 'No product-specific findings were detected by the current rule set.',
       ],
     };
   }
+}
+
+async function analyzeProductBundle({ productType, extractDir, index }) {
+  if (productType === 'longhorn') {
+    return analyzeLonghornSupportBundle({ extractDir, index });
+  }
+
+  return {
+    inventory: {},
+    findingSummary: {
+      total: 0,
+      critical: 0,
+      warning: 0,
+      info: 0,
+    },
+    findings: [],
+  };
 }
 
 export function inferArchiveType(filename) {

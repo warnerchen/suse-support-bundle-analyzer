@@ -423,9 +423,19 @@ function clearReport() {
 function renderReport(report) {
   reportContent.dataset.bundleId = report.bundleId;
   const summary = report.summary;
+  const findingSummary = report.findingSummary ?? {
+    total: 0,
+    critical: 0,
+    warning: 0,
+    info: 0,
+  };
 
   reportContent.innerHTML = `
     <div class="report-summary">
+      <div class="metric">
+        <span class="metric-value">${findingSummary.total}</span>
+        <span class="metric-label">Findings</span>
+      </div>
       <div class="metric">
         <span class="metric-value">${summary.fileCount}</span>
         <span class="metric-label">Files</span>
@@ -444,6 +454,8 @@ function renderReport(report) {
       </div>
     </div>
 
+    ${renderFindings(report.findings ?? [], findingSummary)}
+
     <div class="report-grid">
       <div>
         <h3>Archive</h3>
@@ -452,13 +464,14 @@ function renderReport(report) {
           <dd>${escapeHtml(report.archive.filename)}</dd>
           <dt>Type</dt>
           <dd>${escapeHtml(report.archive.archiveType)}</dd>
+          ${renderArchiveMetadata(report.inventory?.metadata)}
           <dt>SHA-256</dt>
           <dd class="mono">${escapeHtml(report.archive.sha256)}</dd>
         </dl>
       </div>
       <div>
-        <h3>Top-Level Entries</h3>
-        ${renderNameCountList(report.topLevelEntries)}
+        <h3>Longhorn Inventory</h3>
+        ${renderLonghornInventory(report.inventory?.longhorn)}
       </div>
       <div>
         <h3>Largest Files</h3>
@@ -472,6 +485,101 @@ function renderReport(report) {
         ${renderFileIndex(report.fileIndex)}
       </div>
     </div>
+  `;
+}
+
+function renderFindings(findings, summary) {
+  return `
+    <section class="findings-section" aria-labelledby="findingsTitle">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Diagnostics</p>
+          <h3 id="findingsTitle">Findings</h3>
+        </div>
+        <div class="finding-summary" aria-label="Finding severity summary">
+          <span class="severity-dot critical"></span>${summary.critical}
+          <span class="severity-dot warning"></span>${summary.warning}
+          <span class="severity-dot info"></span>${summary.info}
+        </div>
+      </div>
+      ${
+        findings.length
+          ? `<div class="finding-list">${findings.map(renderFinding).join('')}</div>`
+          : '<p class="empty-report">No findings detected by current rules.</p>'
+      }
+    </section>
+  `;
+}
+
+function renderFinding(finding) {
+  const countLabel = Number.isFinite(finding.count) && finding.count > 1 ? ` · ${finding.count} matches` : '';
+
+  return `
+    <article class="finding-card finding-${escapeHtml(finding.severity)}">
+      <div class="finding-card-header">
+        <span class="finding-severity">${escapeHtml(finding.severity)}</span>
+        <span class="finding-category">${escapeHtml(finding.category)}</span>
+      </div>
+      <h4>${escapeHtml(finding.title)}${escapeHtml(countLabel)}</h4>
+      <p>${escapeHtml(finding.description)}</p>
+      ${renderFindingEvidence(finding.evidence)}
+      ${finding.path ? `<div class="finding-path mono">${escapeHtml(finding.path)}</div>` : ''}
+    </article>
+  `;
+}
+
+function renderFindingEvidence(evidence = []) {
+  if (!evidence.length) {
+    return '';
+  }
+
+  return `
+    <ul class="finding-evidence">
+      ${evidence.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}
+    </ul>
+  `;
+}
+
+function renderArchiveMetadata(metadata = {}) {
+  const rows = [
+    ['Kubernetes', metadata.kubernetesversion],
+    ['Created', metadata.bundlecreatedat],
+    ['Issue', metadata.issuedescription],
+  ].filter(([, value]) => value);
+
+  return rows
+    .map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`)
+    .join('');
+}
+
+function renderLonghornInventory(inventory = {}) {
+  const rows = [
+    ['Volumes', inventory.volumes?.total, inventory.volumes?.unhealthy ? `${inventory.volumes.unhealthy} unhealthy` : 'healthy'],
+    ['Replicas', inventory.replicas?.total, inventory.replicas?.notRunning ? `${inventory.replicas.notRunning} not running` : 'running'],
+    ['Nodes', inventory.nodes?.total, inventory.nodes?.problematic ? `${inventory.nodes.problematic} with issues` : 'ready'],
+    ['Pods', inventory.pods?.total, inventory.pods?.withRestarts ? `${inventory.pods.withRestarts} restarted` : 'steady'],
+    ['Events', inventory.events?.total, inventory.events?.warnings ? `${inventory.events.warnings} warnings` : 'normal'],
+    ['Logs', inventory.logs?.scannedFiles, inventory.logs?.matchedLines ? `${inventory.logs.matchedLines} matches` : 'quiet'],
+  ].filter(([, count]) => Number.isFinite(count));
+
+  if (!rows.length) {
+    return '<p class="empty-report">No Longhorn inventory found</p>';
+  }
+
+  return `
+    <ul class="inventory-list">
+      ${rows
+        .map(
+          ([label, count, detail]) => `
+            <li>
+              <span>${escapeHtml(label)}</span>
+              <strong>${count}</strong>
+              <small>${escapeHtml(detail)}</small>
+            </li>
+          `,
+        )
+        .join('')}
+    </ul>
   `;
 }
 
