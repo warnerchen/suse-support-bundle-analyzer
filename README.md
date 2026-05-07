@@ -106,6 +106,10 @@ Supported archive suffixes:
 
 Returns recent uploaded bundle metadata.
 
+### `DELETE /api/bundles/{id}`
+
+Deletes the uploaded bundle file, bundle metadata, and related analysis jobs, reports, and work files. Deletion is blocked while an analysis job is actively running for that bundle.
+
 ### `GET /api/analysis-jobs`
 
 Returns recent analysis jobs.

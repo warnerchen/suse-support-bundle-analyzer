@@ -54,6 +54,11 @@ export class NfsBundleStorage {
     return this.#resolveRelativePath(storageRelativePath);
   }
 
+  async deleteDirectory(storageRelativePath) {
+    const targetPath = this.#resolveRelativePath(storageRelativePath);
+    await fsPromises.rm(targetPath, { recursive: true, force: true });
+  }
+
   #resolveRelativePath(storageRelativePath) {
     const normalized = path.normalize(storageRelativePath);
 

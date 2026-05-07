@@ -39,6 +39,11 @@ export class AnalysisJobRepository {
     return records.find((record) => record.bundleId === bundleId) ?? null;
   }
 
+  async findByBundleId(bundleId) {
+    const records = await this.list();
+    return records.filter((record) => record.bundleId === bundleId);
+  }
+
   async save(record) {
     return this.#serialize(async () => {
       const records = await this.list();
@@ -66,6 +71,35 @@ export class AnalysisJobRepository {
       records[index] = nextRecord;
       await this.#writeAll(records);
       return nextRecord;
+    });
+  }
+
+  async delete(id) {
+    return this.#serialize(async () => {
+      const records = await this.list();
+      const nextRecords = records.filter((record) => record.id !== id);
+
+      if (nextRecords.length === records.length) {
+        return false;
+      }
+
+      await this.#writeAll(nextRecords);
+      return true;
+    });
+  }
+
+  async deleteByBundleId(bundleId) {
+    return this.#serialize(async () => {
+      const records = await this.list();
+      const deletedJobs = records.filter((record) => record.bundleId === bundleId);
+
+      if (!deletedJobs.length) {
+        return [];
+      }
+
+      const nextRecords = records.filter((record) => record.bundleId !== bundleId);
+      await this.#writeAll(nextRecords);
+      return deletedJobs;
     });
   }
 

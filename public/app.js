@@ -79,13 +79,18 @@ function bindEvents() {
   refreshButton.addEventListener('click', refreshDashboard);
   form.addEventListener('submit', uploadBundle);
   bundleRows.addEventListener('click', (event) => {
-    const button = event.target.closest('[data-report-job-id]');
+    const reportButton = event.target.closest('[data-report-job-id]');
 
-    if (!button) {
+    if (reportButton) {
+      loadReport(reportButton.dataset.reportJobId);
       return;
     }
 
-    loadReport(button.dataset.reportJobId);
+    const deleteButton = event.target.closest('[data-delete-bundle-id]');
+
+    if (deleteButton) {
+      deleteBundle(deleteButton.dataset.deleteBundleId, deleteButton.dataset.filename);
+    }
   });
 }
 
@@ -205,13 +210,13 @@ async function refreshDashboard() {
     renderBundles(bundlePayload.bundles, latestJobByBundleId(analysisJobs));
     schedulePolling(analysisJobs);
   } catch (error) {
-    bundleRows.innerHTML = `<tr><td colspan="7" class="empty-cell">${escapeHtml(error.message)}</td></tr>`;
+    bundleRows.innerHTML = `<tr><td colspan="8" class="empty-cell">${escapeHtml(error.message)}</td></tr>`;
   }
 }
 
 function renderBundles(bundles, analysisJobsByBundleId) {
   if (!bundles.length) {
-    bundleRows.innerHTML = '<tr><td colspan="7" class="empty-cell">No uploads yet</td></tr>';
+    bundleRows.innerHTML = '<tr><td colspan="8" class="empty-cell">No uploads yet</td></tr>';
     return;
   }
 
@@ -236,6 +241,17 @@ function renderBundles(bundles, analysisJobsByBundleId) {
               ${canViewReport ? '' : 'disabled'}
             >
               View
+            </button>
+          </td>
+          <td>
+            <button
+              class="delete-button"
+              type="button"
+              data-delete-bundle-id="${escapeHtml(bundle.id)}"
+              data-filename="${escapeHtml(bundle.originalFilename)}"
+              ${job?.status === 'running' ? 'disabled title="Analysis is running"' : ''}
+            >
+              Delete
             </button>
           </td>
         </tr>
@@ -300,7 +316,44 @@ async function loadReport(jobId) {
   }
 }
 
+async function deleteBundle(bundleId, filename) {
+  const confirmed = window.confirm(`Delete uploaded bundle "${filename}" and its analysis data?`);
+
+  if (!confirmed) {
+    return;
+  }
+
+  setFormMessage(`Deleting ${filename}`);
+
+  try {
+    const response = await fetch(`/api/bundles/${bundleId}`, {
+      method: 'DELETE',
+    });
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error?.message ?? 'Delete failed.');
+    }
+
+    setFormMessage(`Deleted ${filename}`, 'success');
+
+    if (reportContent.dataset.bundleId === bundleId) {
+      clearReport();
+    }
+
+    await refreshDashboard();
+  } catch (error) {
+    setFormMessage(error.message, 'error');
+  }
+}
+
+function clearReport() {
+  delete reportContent.dataset.bundleId;
+  reportContent.innerHTML = '<p class="empty-report">Completed analysis reports will appear here.</p>';
+}
+
 function renderReport(report) {
+  reportContent.dataset.bundleId = report.bundleId;
   const summary = report.summary;
 
   reportContent.innerHTML = `

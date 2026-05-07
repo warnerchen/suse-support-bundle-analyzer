@@ -402,7 +402,7 @@ legend {
 
 table {
   width: 100%;
-  min-width: 900px;
+  min-width: 980px;
   border-collapse: collapse;
 }
 
@@ -471,7 +471,8 @@ td {
   color: var(--muted);
 }
 
-.report-button {
+.report-button,
+.delete-button {
   min-height: 34px;
   cursor: pointer;
   border: 1px solid rgba(11, 127, 79, 0.28);
@@ -482,7 +483,13 @@ td {
   padding: 0 12px;
 }
 
-.report-button:disabled {
+.delete-button {
+  border-color: rgba(180, 35, 24, 0.22);
+  color: var(--red);
+}
+
+.report-button:disabled,
+.delete-button:disabled {
   cursor: not-allowed;
   border-color: var(--line);
   color: #9cadad;
@@ -490,6 +497,10 @@ td {
 
 .report-button:not(:disabled):hover {
   background: #eaf6f0;
+}
+
+.delete-button:not(:disabled):hover {
+  background: #fce8e6;
 }
 
 .hash {

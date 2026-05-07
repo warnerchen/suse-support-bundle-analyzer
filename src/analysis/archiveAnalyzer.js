@@ -15,6 +15,10 @@ export class ArchiveAnalyzer {
     this.workDir = workDir;
   }
 
+  async deleteWorkDir(jobId) {
+    await fs.rm(path.join(this.workDir, jobId), { recursive: true, force: true });
+  }
+
   async analyze({ archivePath, bundle, jobId, updateStage }) {
     const archiveType = inferArchiveType(bundle.storedFilename || bundle.originalFilename);
 

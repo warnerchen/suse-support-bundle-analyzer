@@ -45,6 +45,27 @@ export class AnalysisService {
     return this.reportRepository.findByJobId(jobId);
   }
 
+  async hasRunningJobForBundle(bundleId) {
+    const jobs = await this.jobRepository.findByBundleId(bundleId);
+    return jobs.some((job) => job.status === 'running');
+  }
+
+  async deleteForBundle(bundleId) {
+    const jobs = await this.jobRepository.deleteByBundleId(bundleId);
+    const deletedJobIds = jobs.map((job) => job.id);
+    this.pendingJobIds = this.pendingJobIds.filter((jobId) => !deletedJobIds.includes(jobId));
+
+    for (const jobId of deletedJobIds) {
+      await this.reportRepository.delete(jobId);
+
+      if (typeof this.analyzer.deleteWorkDir === 'function') {
+        await this.analyzer.deleteWorkDir(jobId);
+      }
+    }
+
+    return jobs;
+  }
+
   async resumePendingJobs() {
     const jobs = await this.jobRepository.list();
 

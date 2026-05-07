@@ -29,6 +29,10 @@ export class AnalysisReportRepository {
     }
   }
 
+  async delete(jobId) {
+    await fs.rm(this.#reportPath(jobId), { force: true });
+  }
+
   #reportPath(jobId) {
     return path.join(this.reportsDir, `${jobId}.json`);
   }

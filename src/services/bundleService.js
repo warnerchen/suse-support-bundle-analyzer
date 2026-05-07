@@ -18,6 +18,19 @@ export class BundleService {
     return this.repository.findById(id);
   }
 
+  async deleteBundle(id) {
+    const bundle = await this.repository.findById(id);
+
+    if (!bundle) {
+      return null;
+    }
+
+    await this.storage.deleteDirectory(bundle.id);
+    await this.repository.delete(id);
+
+    return bundle;
+  }
+
   async createFromFormData(formData) {
     const productType = String(formData.get('productType') ?? '').toLowerCase();
     const file = formData.get('bundleFile');

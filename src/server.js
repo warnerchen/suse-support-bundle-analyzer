@@ -110,6 +110,26 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (url.pathname.startsWith('/api/bundles/') && request.method === 'DELETE') {
+      const id = url.pathname.split('/').at(-1);
+      const bundle = await bundleService.getBundle(id);
+
+      if (!bundle) {
+        sendError(response, 404, 'Bundle not found.');
+        return;
+      }
+
+      if (await analysisService.hasRunningJobForBundle(id)) {
+        sendError(response, 409, 'Bundle analysis is currently running. Try deleting it again after analysis finishes.');
+        return;
+      }
+
+      const deletedAnalysisJobs = await analysisService.deleteForBundle(id);
+      const deletedBundle = await bundleService.deleteBundle(id);
+      sendJson(response, 200, { bundle: deletedBundle, deletedAnalysisJobs });
+      return;
+    }
+
     if (url.pathname === '/api/bundles' && request.method === 'POST') {
       const contentLength = Number.parseInt(request.headers['content-length'] ?? '0', 10);
 

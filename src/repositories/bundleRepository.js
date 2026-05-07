@@ -43,6 +43,20 @@ export class BundleRepository {
     });
   }
 
+  async delete(id) {
+    return this.#serialize(async () => {
+      const records = await this.list();
+      const nextRecords = records.filter((record) => record.id !== id);
+
+      if (nextRecords.length === records.length) {
+        return false;
+      }
+
+      await this.#writeAll(nextRecords);
+      return true;
+    });
+  }
+
   async #writeAll(records) {
     await fs.mkdir(this.metadataDir, { recursive: true });
 

@@ -34,3 +34,16 @@ test('rejects paths outside the configured NFS root', async (t) => {
     /Invalid NFS storage path/,
   );
 });
+
+test('deletes a stored bundle directory under the configured NFS root', async (t) => {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'suse-bundle-storage-'));
+  t.after(() => fs.rm(rootDir, { recursive: true, force: true }));
+
+  const storage = new NfsBundleStorage(rootDir, { createRoot: true });
+  const file = new File(['content'], 'bundle.tar.gz');
+  await storage.putFile('delete-me/bundle.tar.gz', file);
+
+  await storage.deleteDirectory('delete-me');
+
+  await assert.rejects(() => fs.access(path.join(rootDir, 'delete-me')), /ENOENT/);
+});
