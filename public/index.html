@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SUSE Support Bundle Analyzer</title>
+    <link rel="stylesheet" href="/styles.css?v=20260507-2" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-lockup" aria-label="SUSE Support Bundle Analyzer">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <div>
+            <p class="eyebrow">SUSE Technical Support</p>
+            <h1>Support Bundle Analyzer</h1>
+          </div>
+        </div>
+        <div class="status-pill" id="apiStatus">Checking API</div>
+      </header>
+
+      <main class="workspace">
+        <section class="upload-panel" aria-labelledby="uploadTitle">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Bundle Intake</p>
+              <h2 id="uploadTitle">Upload Support Bundle</h2>
+            </div>
+            <div class="limit-label" id="uploadLimit"></div>
+          </div>
+
+          <form id="uploadForm" class="upload-form">
+            <fieldset>
+              <legend>Product</legend>
+              <div class="segmented-control" id="productOptions">
+                <label class="segment selected">
+                  <input type="radio" name="productType" value="longhorn" checked />
+                  <span>Longhorn</span>
+                </label>
+                <label class="segment">
+                  <input type="radio" name="productType" value="harvester" />
+                  <span>Harvester</span>
+                </label>
+              </div>
+            </fieldset>
+
+            <div class="drop-zone" id="dropZone">
+              <input
+                id="bundleFile"
+                name="bundleFile"
+                type="file"
+                accept=".zip,.tar,.gz,.tgz,.txz,.tbz2,.zst,.xz,.bz2"
+                required
+              />
+              <div class="drop-visual" aria-hidden="true">
+                <span class="archive-icon"></span>
+              </div>
+              <div>
+                <label for="bundleFile" class="file-label">Choose bundle archive</label>
+                <p id="fileName" class="file-name">No file selected</p>
+              </div>
+            </div>
+
+            <div class="progress-wrap" aria-live="polite">
+              <div class="progress-bar" id="progressBar"></div>
+            </div>
+
+            <div class="form-actions">
+              <p class="form-message" id="formMessage"></p>
+              <button class="primary-button" id="submitButton" type="submit">
+                <span class="button-icon" aria-hidden="true">↑</span>
+                Upload
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <section class="table-panel" aria-labelledby="recentTitle">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Queue</p>
+              <h2 id="recentTitle">Recent Uploads</h2>
+            </div>
+            <button class="icon-button" id="refreshButton" type="button" aria-label="Refresh recent uploads" title="Refresh">
+              ↻
+            </button>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Product</th>
+                  <th>Filename</th>
+                  <th>Status</th>
+                  <th>Size</th>
+                  <th>Uploaded</th>
+                  <th>SHA-256</th>
+                </tr>
+              </thead>
+              <tbody id="bundleRows">
+                <tr>
+                  <td colspan="6" class="empty-cell">Loading uploads</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

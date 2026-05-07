@@ -1,0 +1,15 @@
+{
+  "name": "suse-support-bundle-analyzer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Web intake service for uploading SUSE product support bundles.",
+  "type": "module",
+  "scripts": {
+    "dev": "node src/server.js",
+    "start": "node src/server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
