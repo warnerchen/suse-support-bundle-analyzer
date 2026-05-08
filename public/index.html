@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SUSE Support Bundle Analyzer</title>
-    <link rel="stylesheet" href="/styles.css?v=20260508-2" />
+    <link rel="stylesheet" href="/styles.css?v=20260508-11" />
   </head>
   <body>
     <div class="app-shell">
@@ -118,14 +118,60 @@
           </div>
 
           <div class="kb-layout">
-            <form id="kbImportForm" class="kb-import-form">
-              <label class="kb-field-label" for="kbUrlInput">Source URLs</label>
-              <div class="kb-import-control">
-                <textarea id="kbUrlInput" rows="3" placeholder="https://longhorn.io/kb/"></textarea>
-                <button class="primary-button kb-import-button" id="kbImportButton" type="submit">Import</button>
+            <div class="kb-import-stack">
+              <div class="kb-import-options">
+                <label class="kb-product-scope" for="kbProductType">
+                  <span>Product Scope</span>
+                  <select id="kbProductType">
+                    <option value="">Auto detect</option>
+                    <option value="longhorn">Longhorn</option>
+                    <option value="harvester">Harvester</option>
+                  </select>
+                </label>
+                <div class="kb-expand-option">
+                  <label class="kb-checkbox">
+                    <input id="kbExpandLinks" type="checkbox" checked />
+                    <span>Expand same-path links</span>
+                  </label>
+                  <span class="kb-tooltip">
+                    <button
+                      class="kb-tooltip-trigger"
+                      type="button"
+                      aria-label="Explain URL import expansion"
+                      aria-describedby="kbExpandTooltip"
+                    >
+                      i
+                    </button>
+                    <span class="kb-tooltip-bubble" id="kbExpandTooltip" role="tooltip">
+                      Import the entered URL. For directory-style pages, it will also import document
+                      links under the same site and path prefix. Off-site links, static assets, PDFs,
+                      and archive files will be skipped. If importing the URL of a single article,
+                      please disable Expand same-path links.
+                    </span>
+                  </span>
+                </div>
               </div>
+
+              <form id="kbUrlImportForm" class="kb-import-form">
+                <label class="kb-field-label" for="kbUrlInput">Source URLs</label>
+                <div class="kb-import-control">
+                  <textarea id="kbUrlInput" rows="2" placeholder="https://longhorn.io/kb/"></textarea>
+                  <button class="primary-button kb-import-button" id="kbImportButton" type="submit">Import URLs</button>
+                </div>
+              </form>
+
+              <form id="kbFileImportForm" class="kb-file-form">
+                <div class="kb-field-label">Markdown Files</div>
+                <div class="kb-file-control">
+                  <input id="kbFileInput" class="kb-file-input" type="file" accept=".md,.markdown,text/markdown" multiple />
+                  <label class="kb-file-picker" for="kbFileInput">Choose files</label>
+                  <span id="kbFileName" class="kb-file-name">No files selected</span>
+                  <button class="primary-button kb-file-import-button" id="kbFileImportButton" type="submit">Import Files</button>
+                </div>
+              </form>
+
               <p class="form-message" id="kbMessage"></p>
-            </form>
+            </div>
             <div class="kb-status-panel">
               <div class="kb-field-label">Index Status</div>
               <div class="kb-stats" id="kbStats">
@@ -172,6 +218,6 @@
       </section>
     </div>
 
-    <script src="/app.js?v=20260508-1" type="module"></script>
+    <script src="/app.js?v=20260508-4" type="module"></script>
   </body>
 </html>

@@ -17,9 +17,15 @@ const deleteModalFilename = document.querySelector('#deleteModalFilename');
 const deleteModalMessage = document.querySelector('#deleteModalMessage');
 const cancelDeleteButton = document.querySelector('#cancelDeleteButton');
 const confirmDeleteButton = document.querySelector('#confirmDeleteButton');
-const kbImportForm = document.querySelector('#kbImportForm');
+const kbUrlImportForm = document.querySelector('#kbUrlImportForm');
+const kbFileImportForm = document.querySelector('#kbFileImportForm');
 const kbUrlInput = document.querySelector('#kbUrlInput');
 const kbImportButton = document.querySelector('#kbImportButton');
+const kbFileInput = document.querySelector('#kbFileInput');
+const kbFileName = document.querySelector('#kbFileName');
+const kbFileImportButton = document.querySelector('#kbFileImportButton');
+const kbExpandLinks = document.querySelector('#kbExpandLinks');
+const kbProductType = document.querySelector('#kbProductType');
 const kbMessage = document.querySelector('#kbMessage');
 const kbStats = document.querySelector('#kbStats');
 
@@ -90,7 +96,9 @@ function bindEvents() {
 
   refreshButton.addEventListener('click', refreshDashboard);
   form.addEventListener('submit', uploadBundle);
-  kbImportForm.addEventListener('submit', importKbUrls);
+  kbUrlImportForm.addEventListener('submit', importKbUrls);
+  kbFileImportForm.addEventListener('submit', importKbFiles);
+  kbFileInput.addEventListener('change', updateSelectedKbFiles);
   bundleRows.addEventListener('click', (event) => {
     const reportButton = event.target.closest('[data-report-job-id]');
 
@@ -137,6 +145,19 @@ function updateSelectedFile({ clearFeedback = true } = {}) {
     setFormMessage('');
     setProgress(0);
   }
+}
+
+function updateSelectedKbFiles() {
+  const files = [...(kbFileInput.files ?? [])];
+
+  if (!files.length) {
+    kbFileName.textContent = 'No files selected';
+    return;
+  }
+
+  const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+  kbFileName.textContent = `${files.length} file${files.length === 1 ? '' : 's'} · ${formatBytes(totalBytes)}`;
+  setKbMessage('');
 }
 
 async function uploadBundle(event) {
@@ -224,7 +245,11 @@ async function importKbUrls(event) {
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ urls }),
+      body: JSON.stringify({
+        urls,
+        expandLinks: kbExpandLinks.checked,
+        productType: kbProductType.value || null,
+      }),
     });
     const payload = await response.json();
 
@@ -232,24 +257,84 @@ async function importKbUrls(event) {
       throw new Error(payload.error?.message ?? 'KB import failed.');
     }
 
-    const imported = payload.import?.documentsImported ?? 0;
-    const chunks = payload.import?.chunksIndexed ?? 0;
-    const failureCount = payload.import?.failures?.length ?? 0;
-    setKbMessage(
-      `Imported ${imported} document${imported === 1 ? '' : 's'} and indexed ${chunks} chunk${chunks === 1 ? '' : 's'}${
-        failureCount ? `; ${failureCount} failed` : ''
-      }`,
-      failureCount ? 'warning' : 'success',
-    );
-    renderKbStatus(payload.kb);
-
-    if (reportContent.dataset.jobId) {
-      await loadReport(reportContent.dataset.jobId);
-    }
+    await handleKbImportSuccess(payload);
   } catch (error) {
     setKbMessage(error.message, 'error');
   } finally {
     kbImportButton.disabled = false;
+  }
+}
+
+async function importKbFiles(event) {
+  event.preventDefault();
+
+  const files = [...(kbFileInput.files ?? [])];
+
+  if (!files.length) {
+    setKbMessage('Select at least one Markdown file.', 'error');
+    return;
+  }
+
+  const invalidFile = files.find((file) => !/\.(md|markdown)$/i.test(file.name));
+
+  if (invalidFile) {
+    setKbMessage(`${invalidFile.name} is not a Markdown file.`, 'error');
+    return;
+  }
+
+  kbFileImportButton.disabled = true;
+  setKbMessage('Importing Markdown files');
+
+  const formData = new FormData();
+  formData.append('productType', kbProductType.value || '');
+
+  for (const file of files) {
+    formData.append('kbFiles', file);
+  }
+
+  try {
+    const response = await fetch('/api/kb/import-files', {
+      method: 'POST',
+      body: formData,
+    });
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error?.message ?? 'KB file import failed.');
+    }
+
+    kbFileImportForm.reset();
+    updateSelectedKbFiles();
+    await handleKbImportSuccess(payload);
+  } catch (error) {
+    setKbMessage(error.message, 'error');
+  } finally {
+    kbFileImportButton.disabled = false;
+  }
+}
+
+async function handleKbImportSuccess(payload) {
+  const imported = payload.import?.documentsImported ?? 0;
+  const chunks = payload.import?.chunksIndexed ?? 0;
+  const failures = payload.import?.failures ?? [];
+  const failureCount = failures.length;
+  const firstFailure = failures[0]?.message;
+
+  if (!imported && failureCount) {
+    setKbMessage(`No documents imported. ${firstFailure ?? `${failureCount} failed.`}`, 'error');
+  } else {
+    setKbMessage(
+      `Imported ${imported} document${imported === 1 ? '' : 's'} and indexed ${chunks} chunk${chunks === 1 ? '' : 's'}${
+        failureCount ? `; ${failureCount} failed${firstFailure ? `: ${firstFailure}` : ''}` : ''
+      }`,
+      failureCount ? 'warning' : 'success',
+    );
+  }
+
+  renderKbStatus(payload.kb);
+
+  if (reportContent.dataset.jobId) {
+    await loadReport(reportContent.dataset.jobId);
   }
 }
 
@@ -378,15 +463,15 @@ function renderKbStatus(kb = {}) {
   }
 
   kbStats.innerHTML = `
-    <div class="kb-stat">
+    <div class="kb-stat kb-stat-count">
       <strong>${documentCount}</strong>
       <span>Documents</span>
     </div>
-    <div class="kb-stat">
+    <div class="kb-stat kb-stat-count">
       <strong>${chunkCount}</strong>
       <span>Chunks</span>
     </div>
-    <div class="kb-stat">
+    <div class="kb-stat kb-stat-provider">
       <strong>${escapeHtml(kb.embedding?.provider ?? 'unknown')}</strong>
       <span>${escapeHtml(String(kb.embedding?.dimensions ?? ''))} dims</span>
     </div>
@@ -711,9 +796,7 @@ function renderRelatedKb(articles = []) {
           .map(
             (article) => `
               <li>
-                <a href="${escapeHtml(article.sourceUri)}" target="_blank" rel="noreferrer">
-                  ${escapeHtml(article.title)}
-                </a>
+                ${renderKbArticleTitle(article)}
                 <span>${escapeHtml(formatKbScore(article.score))}</span>
                 <p>${escapeHtml(article.excerpt)}</p>
               </li>
@@ -723,6 +806,18 @@ function renderRelatedKb(articles = []) {
       </ul>
     </div>
   `;
+}
+
+function renderKbArticleTitle(article) {
+  if (isHttpUrl(article.sourceUri)) {
+    return `
+      <a href="${escapeHtml(article.sourceUri)}" target="_blank" rel="noreferrer">
+        ${escapeHtml(article.title)}
+      </a>
+    `;
+  }
+
+  return `<strong class="related-kb-title">${escapeHtml(article.title)}</strong>`;
 }
 
 function renderFindings(findings, summary, hasGroups = false) {
@@ -928,6 +1023,15 @@ function formatKbScore(score) {
   }
 
   return `${Math.round(score * 100)}% match`;
+}
+
+function isHttpUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 function escapeHtml(value) {

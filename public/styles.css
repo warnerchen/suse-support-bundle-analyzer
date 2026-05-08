@@ -47,6 +47,7 @@ body.modal-open {
 
 button,
 input,
+select,
 textarea {
   font: inherit;
 }
@@ -414,15 +415,41 @@ legend {
 
 .kb-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(340px, 428px);
-  gap: 16px;
+  grid-template-columns: minmax(0, 620px) minmax(360px, 1fr);
+  gap: 34px;
   align-items: start;
 }
 
+.kb-import-stack,
 .kb-import-form,
-.kb-status-panel {
+.kb-file-form {
   display: grid;
   gap: 10px;
+}
+
+.kb-import-stack {
+  min-width: 0;
+  max-width: 620px;
+  gap: 14px;
+}
+
+.kb-import-options,
+.kb-import-form,
+.kb-file-form,
+.kb-import-stack > .form-message {
+  width: 100%;
+  max-width: 620px;
+}
+
+.kb-status-panel {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  align-content: start;
+  gap: 12px;
+  border-left: 1px dashed #c9d7d0;
+  padding-top: 2px;
+  padding-left: 28px;
 }
 
 .kb-field-label {
@@ -431,45 +458,241 @@ legend {
   font-weight: 800;
 }
 
+.kb-import-options {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: 14px 18px;
+  align-items: end;
+  max-width: 620px;
+}
+
+.kb-product-scope {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.kb-product-scope select {
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--text);
+  font-size: 0.92rem;
+  font-weight: 750;
+  padding: 0 12px;
+}
+
+.kb-expand-option {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 44px;
+  align-items: center;
+  gap: 8px;
+}
+
+.kb-checkbox {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 44px;
+  align-items: center;
+  gap: 9px;
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
+.kb-checkbox input {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  accent-color: var(--green);
+}
+
+.kb-checkbox span {
+  min-width: 0;
+}
+
+.kb-tooltip {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.kb-tooltip-trigger {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  cursor: help;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(11, 127, 79, 0.28);
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--green-dark);
+  font-size: 0.75rem;
+  font-weight: 900;
+  line-height: 1;
+  padding: 1px 0 0;
+}
+
+.kb-tooltip-trigger:hover,
+.kb-tooltip-trigger:focus-visible {
+  border-color: rgba(11, 127, 79, 0.52);
+  background: #eaf6f0;
+  outline: none;
+}
+
+.kb-tooltip-bubble {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  z-index: 20;
+  width: min(330px, calc(100vw - 48px));
+  border: 1px solid rgba(18, 33, 26, 0.18);
+  border-radius: 8px;
+  background: #18211d;
+  box-shadow: 0 18px 44px rgba(18, 33, 26, 0.2);
+  color: #ffffff;
+  font-size: 0.78rem;
+  font-weight: 650;
+  line-height: 1.45;
+  opacity: 0;
+  padding: 10px 12px;
+  pointer-events: none;
+  transform: translate(-50%, 4px);
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease,
+    visibility 140ms ease;
+  visibility: hidden;
+}
+
+.kb-tooltip-bubble::after {
+  position: absolute;
+  bottom: -6px;
+  left: 50%;
+  width: 10px;
+  height: 10px;
+  background: #18211d;
+  content: "";
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.kb-tooltip:hover .kb-tooltip-bubble,
+.kb-tooltip:focus-within .kb-tooltip-bubble {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  visibility: visible;
+}
+
 .kb-import-control {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 104px;
-  gap: 10px;
-  align-items: stretch;
+  grid-template-columns: minmax(0, 1fr) 144px;
+  gap: 12px;
+  align-items: center;
+  min-height: 56px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfb;
+  padding: 9px 10px;
 }
 
 .kb-import-form textarea {
   width: 100%;
-  min-height: 96px;
-  resize: vertical;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fbfcfb;
+  height: 36px;
+  min-height: 36px;
+  resize: none;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
   color: var(--text);
   line-height: 1.45;
-  padding: 12px;
+  padding: 6px 4px;
 }
 
 .kb-import-form textarea:focus {
+  outline: none;
+}
+
+.kb-import-control:focus-within {
   outline: 2px solid rgba(11, 127, 79, 0.2);
   border-color: rgba(11, 127, 79, 0.45);
 }
 
 .kb-import-button {
-  align-self: stretch;
-  min-height: 96px;
+  min-height: 36px;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
+.kb-file-control {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 144px;
+  gap: 12px;
+  align-items: center;
+  min-height: 56px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfb;
+  padding: 9px 10px;
+}
+
+.kb-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.kb-file-picker {
+  display: inline-flex;
+  min-height: 36px;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--green-dark);
+  font-size: 0.86rem;
+  font-weight: 850;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
+.kb-file-picker:hover {
+  border-color: rgba(11, 127, 79, 0.36);
+  background: #eaf6f0;
+}
+
+.kb-file-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-file-import-button {
+  min-height: 36px;
+  padding: 0 12px;
+  white-space: nowrap;
 }
 
 .kb-stats {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   align-content: start;
-  min-height: 96px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fbfcfb;
-  padding: 10px;
+  min-height: 0;
 }
 
 .kb-stats .empty-report {
@@ -478,11 +701,18 @@ legend {
 }
 
 .kb-stat {
+  display: grid;
   min-width: 0;
+  min-height: 76px;
+  align-content: center;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #ffffff;
-  padding: 10px 11px;
+  background: #fbfcfb;
+  padding: 12px 14px;
+}
+
+.kb-stat-provider {
+  grid-column: 1 / -1;
 }
 
 .kb-stat strong,
@@ -496,8 +726,12 @@ legend {
 
 .kb-stat strong {
   color: var(--green-dark);
-  font-size: 1rem;
+  font-size: 1.18rem;
   font-weight: 850;
+}
+
+.kb-stat-provider strong {
+  font-size: 1rem;
 }
 
 .kb-stat span {
@@ -510,10 +744,11 @@ legend {
 
 .kb-updated {
   grid-column: 1 / -1;
+  border-top: 1px solid var(--line);
   color: var(--muted);
   font-size: 0.84rem;
   font-weight: 700;
-  padding: 0 2px;
+  padding: 10px 2px 0;
 }
 
 .table-wrap {
@@ -1088,12 +1323,16 @@ td {
   gap: 4px 10px;
 }
 
-.related-kb a {
+.related-kb a,
+.related-kb-title {
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--green-dark);
   font-size: 0.86rem;
   font-weight: 850;
+}
+
+.related-kb a {
   text-decoration-thickness: 2px;
   text-underline-offset: 3px;
 }
@@ -1248,8 +1487,19 @@ td {
     grid-template-columns: 1fr;
   }
 
+  .kb-status-panel {
+    border-top: 1px solid var(--line);
+    border-left: 0;
+    padding-top: 18px;
+    padding-left: 0;
+  }
+
   .kb-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .kb-stat-provider {
+    grid-column: auto;
   }
 }
 
@@ -1285,8 +1535,44 @@ td {
     grid-template-columns: 1fr;
   }
 
+  .kb-import-options,
+  .kb-file-control {
+    grid-template-columns: 1fr;
+  }
+
+  .kb-import-options {
+    max-width: none;
+  }
+
+  .kb-expand-option {
+    align-items: flex-start;
+  }
+
+  .kb-tooltip-bubble {
+    right: 0;
+    left: auto;
+    width: min(300px, calc(100vw - 38px));
+    transform: translateY(4px);
+  }
+
+  .kb-tooltip-bubble::after {
+    right: 6px;
+    left: auto;
+    transform: rotate(45deg);
+  }
+
+  .kb-tooltip:hover .kb-tooltip-bubble,
+  .kb-tooltip:focus-within .kb-tooltip-bubble {
+    transform: translateY(0);
+  }
+
   .kb-import-button {
     min-height: 44px;
+  }
+
+  .kb-file-picker,
+  .kb-file-import-button {
+    width: 100%;
   }
 
   .primary-button {
@@ -1295,6 +1581,10 @@ td {
 
   .kb-stats {
     grid-template-columns: 1fr;
+  }
+
+  .kb-stat-provider {
+    grid-column: 1 / -1;
   }
 
   .delete-modal {

@@ -59,6 +59,7 @@ export class KbStore {
     );
     state.chunks = state.chunks.filter((chunk) => !documentIds.has(chunk.documentId));
 
+    let importedDocuments = 0;
     let indexedChunks = 0;
 
     for (const document of acceptedDocuments) {
@@ -83,6 +84,7 @@ export class KbStore {
         chunkCount: chunks.length,
       });
       state.chunks.push(...chunks);
+      importedDocuments += 1;
       indexedChunks += chunks.length;
     }
 
@@ -91,9 +93,9 @@ export class KbStore {
     await this.#saveState(state);
 
     return {
-      documentsImported: acceptedDocuments.length,
+      documentsImported: importedDocuments,
       chunksIndexed: indexedChunks,
-      documentsSkipped: documents.length - acceptedDocuments.length,
+      documentsSkipped: documents.length - importedDocuments,
       totalDocuments: state.documents.length,
       totalChunks: state.chunks.length,
       updatedAt: state.updatedAt,

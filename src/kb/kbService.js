@@ -3,7 +3,10 @@ import {
   KB_REMOTE_IMPORT_LIMIT,
   KB_TEXT_IMPORT_MAX_BYTES,
 } from '../config.js';
-import { extractKbLinks, normalizeKbDocument } from './kbText.js';
+import { extractDocumentLinks, normalizeKbDocument } from './kbText.js';
+
+const SUPPORTED_MARKDOWN_SUFFIXES = ['.md', '.markdown'];
+const REMOTE_DOCUMENT_MIN_CHARS = 120;
 
 const GROUP_QUERY_HINTS = {
   'longhorn-manager-stability':
@@ -47,7 +50,7 @@ export class KbService {
     return this.store.getStats();
   }
 
-  async importFromUrls(urls) {
+  async importFromUrls(urls, { expandLinks = true, productType = null } = {}) {
     const requestedUrls = sanitizeUrls(urls);
 
     if (!requestedUrls.length) {
@@ -60,9 +63,9 @@ export class KbService {
     for (const sourceUrl of requestedUrls) {
       try {
         const page = await this.#fetchText(sourceUrl);
-        const links = extractKbLinks(page.content, page.url);
+        const links = expandLinks ? extractDocumentLinks(page.content, page.url) : [];
 
-        if (isKbIndexUrl(page.url) && links.length) {
+        if (shouldExpandLinks(page.url, links, expandLinks)) {
           importUrls.push(...links);
         } else {
           importUrls.push(page.url);
@@ -78,13 +81,20 @@ export class KbService {
     for (const url of uniqueUrls) {
       try {
         const page = await this.#fetchText(url);
-        documents.push(
-          normalizeKbDocument({
-            content: page.content,
-            sourceUri: page.url,
-            contentType: page.contentType,
-          }),
-        );
+        const document = normalizeKbDocument({
+          content: page.content,
+          sourceUri: page.url,
+          contentType: page.contentType,
+          productType,
+        });
+        const validationMessage = validateRemoteDocument(document);
+
+        if (validationMessage) {
+          failures.push({ url, message: validationMessage });
+          continue;
+        }
+
+        documents.push(document);
       } catch (error) {
         failures.push({ url, message: error.message });
       }
@@ -95,6 +105,60 @@ export class KbService {
     return {
       requestedUrls,
       discoveredUrls: uniqueUrls.length,
+      failures,
+      ...result,
+    };
+  }
+
+  async importFromFiles(files, { productType = null } = {}) {
+    const fileList = Array.isArray(files) ? files : [files].filter(Boolean);
+
+    if (!fileList.length) {
+      throw validationError('Select at least one Markdown file to import.');
+    }
+
+    const documents = [];
+    const failures = [];
+
+    for (const file of fileList) {
+      try {
+        const name = String(file.name ?? 'knowledge-base.md');
+
+        if (!isMarkdownFilename(name)) {
+          throw new Error('Only .md and .markdown files are supported.');
+        }
+
+        if (Number.isFinite(file.size) && file.size > this.maxTextBytes) {
+          throw new Error(`KB file is larger than ${this.maxTextBytes} bytes.`);
+        }
+
+        const content = await file.text();
+        const byteLength = Buffer.byteLength(content, 'utf8');
+
+        if (byteLength > this.maxTextBytes) {
+          throw new Error(`KB file is larger than ${this.maxTextBytes} bytes.`);
+        }
+
+        documents.push(
+          normalizeKbDocument({
+            content,
+            sourceUri: `uploaded://${encodeURIComponent(name)}`,
+            contentType: file.type || 'text/markdown',
+            productType,
+          }),
+        );
+      } catch (error) {
+        failures.push({
+          filename: file?.name ?? 'unknown',
+          message: error.message,
+        });
+      }
+    }
+
+    const result = await this.store.upsertDocuments(documents);
+
+    return {
+      requestedFiles: fileList.length,
       failures,
       ...result,
     };
@@ -216,13 +280,46 @@ function sanitizeUrls(urls) {
   ];
 }
 
-function isKbIndexUrl(sourceUrl) {
+function shouldExpandLinks(sourceUrl, links, expandLinks) {
+  if (!expandLinks || links.length < 2) {
+    return false;
+  }
+
   try {
     const { pathname } = new URL(sourceUrl);
-    return pathname === '/kb/' || pathname === '/kb';
+    return pathname !== '/' && pathname.endsWith('/');
   } catch {
     return false;
   }
+}
+
+function isMarkdownFilename(filename) {
+  const lower = filename.toLowerCase();
+  return SUPPORTED_MARKDOWN_SUFFIXES.some((suffix) => lower.endsWith(suffix));
+}
+
+function validateRemoteDocument(document) {
+  const body = document.body.trim();
+
+  if (isDynamicShellDocument(document)) {
+    return 'Fetched page did not contain readable KB article content. This source may require JavaScript rendering or a Markdown/export source.';
+  }
+
+  if (body.length < REMOTE_DOCUMENT_MIN_CHARS) {
+    return 'Fetched page did not contain enough readable KB article content.';
+  }
+
+  return '';
+}
+
+function isDynamicShellDocument(document) {
+  const body = document.body.replace(/\s+/g, ' ').trim();
+
+  return (
+    /^(SUSE Customer Portal|Salesforce)$/i.test(document.title) &&
+    /Loading/i.test(body) &&
+    /Sorry to interrupt|CSS Error|Refresh/i.test(body)
+  );
 }
 
 function isTextContent(contentType) {

@@ -10,7 +10,7 @@ Current scope:
 - Create an analysis job automatically after upload
 - Safely extract common archive formats and generate a file index report
 - Run Longhorn inventory checks, finding correlation, and grouped diagnostics
-- Import Longhorn KB URLs from the UI and store a local vector index
+- Import product KB URLs or Markdown files from the UI and store a local vector index
 - Show related KB articles on correlated Longhorn findings
 - Persist bundle metadata as JSON
 - Show recent uploads in the UI
@@ -142,15 +142,26 @@ Returns local KB index status, including document count, chunk count, embedding 
 
 ### `POST /api/kb/import-url`
 
-Imports one or more KB URLs and rebuilds matching local vector chunks. Passing the Longhorn KB index URL expands all article links found under `/kb/`.
+Imports one or more KB URLs and rebuilds matching local vector chunks. When `expandLinks` is enabled, an index-style URL expands same-origin links under the same path prefix, so URLs such as `/kb/`, `/docs/`, or `/troubleshooting/` can be used without assuming a Longhorn-specific URL format. A single article URL can be imported directly by setting `expandLinks` to `false`.
 
 JSON body:
 
 ```json
 {
-  "urls": ["https://longhorn.io/kb/"]
+  "urls": ["https://longhorn.io/kb/"],
+  "expandLinks": true,
+  "productType": "longhorn"
 }
 ```
+
+### `POST /api/kb/import-files`
+
+Imports one or more Markdown files and rebuilds matching local vector chunks.
+
+Multipart form fields:
+
+- `productType`: optional product scope, currently `longhorn` or `harvester`; omit for auto-detect
+- `kbFiles`: one or more `.md` or `.markdown` files
 
 ### `GET /api/kb/search?q={query}`
 

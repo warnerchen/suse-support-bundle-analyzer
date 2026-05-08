@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { KbService } from '../src/kb/kbService.js';
 import { KbStore } from '../src/kb/kbStore.js';
-import { extractKbLinks, normalizeKbDocument } from '../src/kb/kbText.js';
+import { extractDocumentLinks, extractKbLinks, normalizeKbDocument } from '../src/kb/kbText.js';
 import { LocalEmbeddingProvider } from '../src/kb/localEmbeddingProvider.js';
 
 test('extracts Longhorn KB article links from an index page', () => {
@@ -22,6 +22,24 @@ test('extracts Longhorn KB article links from an index page', () => {
   assert.deepEqual(links, [
     'https://longhorn.io/kb/manual-recovery-of-nodes-with-insufficient-space/',
     'https://longhorn.io/kb/troubleshooting-volume-pvc-xxx-not-scheduled/',
+  ]);
+});
+
+test('extracts same-path document links for non-Longhorn documentation indexes', () => {
+  const links = extractDocumentLinks(
+    [
+      '<a href="/docs/troubleshooting/storage/">Storage</a>',
+      '<a href="/docs/troubleshooting/network/">Network</a>',
+      '<a href="/docs/install/">Install</a>',
+      '<a href="/assets/app.js">Script</a>',
+      '<a href="https://example.com/docs/troubleshooting/storage/">External</a>',
+    ].join('\n'),
+    'https://harvester.example/docs/troubleshooting/',
+  );
+
+  assert.deepEqual(links, [
+    'https://harvester.example/docs/troubleshooting/network/',
+    'https://harvester.example/docs/troubleshooting/storage/',
   ]);
 });
 
@@ -79,6 +97,97 @@ test('imports KB URLs and searches the local vector index', async () => {
     });
 
     assert.equal(matches[0].title, 'Troubleshooting: `volume pvc-xxx not scheduled`');
+  } finally {
+    await fs.rm(storageDir, { recursive: true, force: true });
+  }
+});
+
+test('imports Markdown files into the local vector index', async () => {
+  const storageDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kb-md-store-'));
+
+  try {
+    const service = new KbService({
+      store: new KbStore({
+        storageDir,
+        embeddingProvider: new LocalEmbeddingProvider({ dimensions: 64 }),
+      }),
+    });
+    await service.ensureReady();
+
+    const result = await service.importFromFiles(
+      [
+        markdownFile(
+          'harvester-storage.md',
+          [
+            '# Harvester Storage Network Troubleshooting',
+            '',
+            'When Harvester storage network routes are missing, Longhorn volume attachment can fail.',
+            'Check VLAN configuration, node network status, and storage network reachability.',
+          ].join('\n'),
+        ),
+        markdownFile(
+          'harvester-upgrade.markdown',
+          [
+            '# Harvester Upgrade Runbook',
+            '',
+            'Before upgrade, confirm images are downloaded and cluster operators are healthy.',
+          ].join('\n'),
+        ),
+      ],
+      { productType: 'harvester' },
+    );
+
+    assert.equal(result.documentsImported, 2);
+    assert.ok(result.chunksIndexed >= 2);
+
+    const matches = await service.search('harvester storage network routes attachment fail', {
+      productType: 'harvester',
+      limit: 2,
+    });
+
+    assert.equal(matches[0].title, 'Harvester Storage Network Troubleshooting');
+  } finally {
+    await fs.rm(storageDir, { recursive: true, force: true });
+  }
+});
+
+test('skips remote pages without readable KB article content', async () => {
+  const storageDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kb-shell-store-'));
+  const sourceUrl = 'https://support.scc.suse.com/s/kb/Bypassing-a-Deleted-Node-During-Harvester-Upgrade?language=en_US';
+
+  try {
+    const service = new KbService({
+      store: new KbStore({
+        storageDir,
+        embeddingProvider: new LocalEmbeddingProvider({ dimensions: 64 }),
+      }),
+      fetchImpl: fixtureFetch({
+        [sourceUrl]: `
+          <html>
+            <head><title>SUSE Customer Portal</title></head>
+            <body>
+              <div>Loading</div>
+              <div>Sorry to interrupt</div>
+              <div>CSS Error</div>
+              <a href="?">Refresh</a>
+            </body>
+          </html>
+        `,
+      }),
+    });
+
+    await service.ensureReady();
+    const result = await service.importFromUrls([sourceUrl], {
+      expandLinks: false,
+      productType: 'harvester',
+    });
+    const stats = await service.getStatus();
+
+    assert.equal(result.documentsImported, 0);
+    assert.equal(result.chunksIndexed, 0);
+    assert.equal(result.failures.length, 1);
+    assert.match(result.failures[0].message, /readable KB article content/);
+    assert.equal(stats.documentCount, 0);
   } finally {
     await fs.rm(storageDir, { recursive: true, force: true });
   }
@@ -159,6 +268,17 @@ function fixtureFetch(pages) {
         'content-type': 'text/html; charset=utf-8',
       },
     });
+  };
+}
+
+function markdownFile(name, content) {
+  return {
+    name,
+    size: Buffer.byteLength(content, 'utf8'),
+    type: 'text/markdown',
+    async text() {
+      return content;
+    },
   };
 }
 

@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 const DEFAULT_CHUNK_TARGET_CHARS = 1800;
 const DEFAULT_CHUNK_OVERLAP_CHARS = 180;
 
-export function normalizeKbDocument({ content, sourceUri, contentType = '' }) {
+export function normalizeKbDocument({ content, sourceUri, contentType = '', productType = null }) {
   const raw = String(content ?? '');
   const looksLikeHtml = /<\/?[a-z][\s\S]*>/i.test(raw) || contentType.includes('html');
   const normalized = looksLikeHtml ? htmlToDocument(raw) : plainTextToDocument(raw);
@@ -13,10 +13,10 @@ export function normalizeKbDocument({ content, sourceUri, contentType = '' }) {
   return {
     id: kbDocumentId(sourceUri || `${title}:${body.slice(0, 100)}`),
     sourceUri,
-    productType: inferProductType(sourceUri, body),
+    productType: normalizeProductType(productType) ?? inferProductType(sourceUri, body),
     title: cleanTitle(title),
     body,
-    contentType: looksLikeHtml ? 'text/html' : 'text/plain',
+    contentType: looksLikeHtml ? 'text/html' : contentType || 'text/plain',
     importedAt: new Date().toISOString(),
   };
 }
@@ -70,8 +70,14 @@ export function chunkKbDocument(document, {
 }
 
 export function extractKbLinks(html, baseUri) {
+  return extractDocumentLinks(html, baseUri, { restrictToPathPrefix: '/kb/' });
+}
+
+export function extractDocumentLinks(html, baseUri, { restrictToPathPrefix = null } = {}) {
   const links = new Set();
   const pattern = /<a\b[^>]*href=(?:"([^"]+)"|'([^']+)'|([^\s>]+))/gi;
+  const base = new URL(baseUri);
+  const pathPrefix = restrictToPathPrefix ?? directoryPathPrefix(base.pathname);
   let match;
 
   while ((match = pattern.exec(html))) {
@@ -80,16 +86,21 @@ export function extractKbLinks(html, baseUri) {
     try {
       const link = new URL(decodeEntities(href), baseUri);
 
-      if (link.origin !== new URL(baseUri).origin) {
+      if (link.origin !== base.origin) {
         continue;
       }
 
-      if (!link.pathname.startsWith('/kb/') || link.pathname === '/kb/') {
+      if (link.pathname === base.pathname || !link.pathname.startsWith(pathPrefix)) {
         continue;
       }
 
       link.hash = '';
       link.search = '';
+
+      if (isIgnoredDocumentPath(link.pathname)) {
+        continue;
+      }
+
       links.add(link.href);
     } catch {
       // Ignore malformed page links. The source document is still importable.
@@ -131,7 +142,7 @@ function plainTextToDocument(content) {
   const heading = lines.find((line) => line.length <= 120 && !/[.!?]$/.test(line));
 
   return {
-    title: heading ?? '',
+    title: heading ? heading.replace(/^#{1,6}\s+/, '').trim() : '',
     body: content,
   };
 }
@@ -179,7 +190,10 @@ function stripTags(value) {
 }
 
 function cleanTitle(title) {
-  return collapseWhitespace(title).replace(/\s+\|\s+The Longhorn Knowledge Base$/i, '').trim();
+  return collapseWhitespace(title)
+    .replace(/\s+\|\s+The Longhorn Knowledge Base$/i, '')
+    .replace(/^#{1,6}\s+/, '')
+    .trim();
 }
 
 function splitIntoParagraphs(text) {
@@ -256,5 +270,29 @@ function inferTitleFromSource(sourceUri) {
 
 function inferProductType(sourceUri, body) {
   const text = `${sourceUri ?? ''}\n${body}`.toLowerCase();
-  return text.includes('longhorn') ? 'longhorn' : 'unknown';
+  return normalizeProductType(text.includes('longhorn') ? 'longhorn' : text.includes('harvester') ? 'harvester' : null) ?? 'unknown';
+}
+
+function normalizeProductType(productType) {
+  const normalized = String(productType ?? '').trim().toLowerCase();
+
+  if (normalized === 'longhorn' || normalized === 'harvester') {
+    return normalized;
+  }
+
+  return null;
+}
+
+function directoryPathPrefix(pathname) {
+  if (!pathname || pathname === '/') {
+    return '/';
+  }
+
+  return pathname.endsWith('/') ? pathname : `${pathname}/`;
+}
+
+function isIgnoredDocumentPath(pathname) {
+  return /\.(css|js|mjs|map|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|eot|zip|tar|gz|tgz|pdf)$/i.test(
+    pathname,
+  );
 }

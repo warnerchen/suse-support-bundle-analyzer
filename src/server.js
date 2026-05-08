@@ -108,7 +108,26 @@ const server = http.createServer(async (request, response) => {
       }
 
       const body = await readJsonBody(request);
-      const result = await kbService.importFromUrls(body.urls ?? body.url);
+      const result = await kbService.importFromUrls(body.urls ?? body.url, {
+        expandLinks: body.expandLinks !== false,
+        productType: body.productType,
+      });
+      sendJson(response, 201, { import: result, kb: await kbService.getStatus() });
+      return;
+    }
+
+    if (url.pathname === '/api/kb/import-files' && request.method === 'POST') {
+      const contentType = request.headers['content-type'] ?? '';
+
+      if (!contentType.includes('multipart/form-data')) {
+        sendError(response, 415, 'KB file import must use multipart/form-data.');
+        return;
+      }
+
+      const formData = await parseMultipartForm(request);
+      const result = await kbService.importFromFiles(formData.getAll('kbFiles'), {
+        productType: formData.get('productType'),
+      });
       sendJson(response, 201, { import: result, kb: await kbService.getStatus() });
       return;
     }
