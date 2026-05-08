@@ -5,12 +5,17 @@ import {
   BUNDLE_STORAGE_DIR,
   CREATE_BUNDLE_STORAGE_DIR,
   HOST,
+  KB_EMBEDDING_DIMENSIONS,
+  KB_STORAGE_DIR,
   MAX_UPLOAD_BYTES,
   METADATA_DIR,
   PORT,
   PRODUCT_OPTIONS,
   PUBLIC_DIR,
 } from './config.js';
+import { KbService } from './kb/kbService.js';
+import { KbStore } from './kb/kbStore.js';
+import { LocalEmbeddingProvider } from './kb/localEmbeddingProvider.js';
 import { AnalysisJobRepository } from './repositories/analysisJobRepository.js';
 import { AnalysisReportRepository } from './repositories/analysisReportRepository.js';
 import { BundleRepository } from './repositories/bundleRepository.js';
@@ -19,6 +24,7 @@ import { BundleService } from './services/bundleService.js';
 import { NfsBundleStorage } from './storage/nfsBundleStorage.js';
 import { allowedArchiveSuffixes } from './utils/archiveValidation.js';
 import { sendError, sendJson, setSecurityHeaders } from './utils/http.js';
+import { readJsonBody } from './utils/jsonBody.js';
 import { parseMultipartForm } from './utils/requestForm.js';
 import { serveStaticFile } from './utils/staticFiles.js';
 
@@ -27,15 +33,22 @@ const storage = new NfsBundleStorage(BUNDLE_STORAGE_DIR, {
 });
 const repository = new BundleRepository(METADATA_DIR);
 const bundleService = new BundleService({ repository, storage });
+const kbStore = new KbStore({
+  storageDir: KB_STORAGE_DIR,
+  embeddingProvider: new LocalEmbeddingProvider({ dimensions: KB_EMBEDDING_DIMENSIONS }),
+});
+const kbService = new KbService({ store: kbStore });
 const analysisService = new AnalysisService({
   analyzer: new ArchiveAnalyzer({ workDir: ANALYSIS_WORK_DIR }),
   bundleRepository: repository,
   jobRepository: new AnalysisJobRepository(METADATA_DIR),
   reportRepository: new AnalysisReportRepository(METADATA_DIR),
   storage,
+  kbService,
 });
 
 await storage.ensureReady();
+await kbService.ensureReady();
 await analysisService.resumePendingJobs();
 
 const server = http.createServer(async (request, response) => {
@@ -65,6 +78,38 @@ const server = http.createServer(async (request, response) => {
 
     if (url.pathname === '/api/analysis-jobs' && request.method === 'GET') {
       sendJson(response, 200, { analysisJobs: await analysisService.listJobs() });
+      return;
+    }
+
+    if (url.pathname === '/api/kb/status' && request.method === 'GET') {
+      sendJson(response, 200, { kb: await kbService.getStatus() });
+      return;
+    }
+
+    if (url.pathname === '/api/kb/search' && request.method === 'GET') {
+      const q = url.searchParams.get('q') ?? '';
+      const productType = url.searchParams.get('productType');
+      const limit = Number.parseInt(url.searchParams.get('limit') ?? '5', 10);
+      const results = await kbService.search(q, {
+        productType,
+        limit: Number.isFinite(limit) ? Math.min(Math.max(limit, 1), 20) : 5,
+      });
+
+      sendJson(response, 200, { results });
+      return;
+    }
+
+    if (url.pathname === '/api/kb/import-url' && request.method === 'POST') {
+      const contentType = request.headers['content-type'] ?? '';
+
+      if (!contentType.includes('application/json')) {
+        sendError(response, 415, 'KB import must use application/json.');
+        return;
+      }
+
+      const body = await readJsonBody(request);
+      const result = await kbService.importFromUrls(body.urls ?? body.url);
+      sendJson(response, 201, { import: result, kb: await kbService.getStatus() });
       return;
     }
 

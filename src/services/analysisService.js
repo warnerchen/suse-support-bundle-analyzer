@@ -1,12 +1,13 @@
 import crypto from 'node:crypto';
 
 export class AnalysisService {
-  constructor({ analyzer, bundleRepository, jobRepository, reportRepository, storage }) {
+  constructor({ analyzer, bundleRepository, jobRepository, reportRepository, storage, kbService = null }) {
     this.analyzer = analyzer;
     this.bundleRepository = bundleRepository;
     this.jobRepository = jobRepository;
     this.reportRepository = reportRepository;
     this.storage = storage;
+    this.kbService = kbService;
     this.pendingJobIds = [];
     this.processing = false;
   }
@@ -42,7 +43,13 @@ export class AnalysisService {
   }
 
   async getReport(jobId) {
-    return this.reportRepository.findByJobId(jobId);
+    const report = await this.reportRepository.findByJobId(jobId);
+
+    if (!report) {
+      return null;
+    }
+
+    return this.#enrichReport(report);
   }
 
   async hasRunningJobForBundle(bundleId) {
@@ -141,22 +148,42 @@ export class AnalysisService {
         jobId,
         updateStage: (stage) => this.jobRepository.update(jobId, { stage }),
       });
+      const enrichedReport = await this.#enrichReport(report);
 
-      await this.reportRepository.save(jobId, report);
+      await this.reportRepository.save(jobId, enrichedReport);
       await this.jobRepository.update(jobId, {
         status: 'completed',
         stage: 'completed',
         completedAt: new Date().toISOString(),
         reportAvailable: true,
-        summary: report.summary,
+        summary: enrichedReport.summary,
       });
     } catch (error) {
       await this.jobRepository.update(jobId, {
         status: 'failed',
         stage: 'failed',
         failedAt: new Date().toISOString(),
-        errorMessage: error.message,
+      errorMessage: error.message,
       });
+    }
+  }
+
+  async #enrichReport(report) {
+    if (!this.kbService) {
+      return report;
+    }
+
+    try {
+      return await this.kbService.enrichReport(report);
+    } catch (error) {
+      console.error(error);
+      return {
+        ...report,
+        kbSummary: {
+          enabled: false,
+          errorMessage: error.message,
+        },
+      };
     }
   }
 }

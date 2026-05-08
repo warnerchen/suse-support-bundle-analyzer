@@ -116,9 +116,15 @@ export async function analyzeLonghornSupportBundle({ extractDir, index }) {
   findings.push(...logAnalysis.findings);
 
   const sortedFindings = sortFindings(dedupeFindings(findings));
+  const findingGroups = buildFindingGroups({
+    findings: sortedFindings,
+    inventory,
+  });
 
   return {
     inventory,
+    groupSummary: summarizeFindingGroups(findingGroups),
+    findingGroups,
     findingSummary: summarizeFindings(sortedFindings),
     findings: sortedFindings,
   };
@@ -139,6 +145,236 @@ export function summarizeFindings(findings) {
   }
 
   return summary;
+}
+
+export function summarizeFindingGroups(groups) {
+  const summary = {
+    total: groups.length,
+    critical: 0,
+    warning: 0,
+    info: 0,
+  };
+
+  for (const group of groups) {
+    if (Object.hasOwn(summary, group.severity)) {
+      summary[group.severity] += 1;
+    }
+  }
+
+  return summary;
+}
+
+function buildFindingGroups({ findings, inventory }) {
+  const groups = [];
+  const longhorn = inventory.longhorn ?? {};
+  const collectionFinding = findFinding(findings, 'longhorn-bundle-generation-errors');
+  const panicFinding = findFinding(findings, 'longhorn-manager-observed-panic');
+  const errorLogFinding = findFinding(findings, 'longhorn-log-error-lines');
+  const storageFinding = findFinding(findings, 'longhorn-log-replica-scheduling-storage');
+  const webhookFinding = findFinding(findings, 'longhorn-log-webhook-connection-refused');
+  const csiFinding = findFinding(findings, 'longhorn-log-csi-connection-refused');
+  const nodeFindings = findings.filter((finding) => finding.category === 'Longhorn Node');
+  const volumeFindings = findings.filter((finding) => finding.category === 'Longhorn Volume');
+  const replicaFindings = findings.filter((finding) => finding.category === 'Longhorn Replica');
+  const podRestartFinding = findFinding(findings, 'longhorn-pods-with-container-restarts');
+  const monitoringFindings = findings.filter((finding) => finding.category === 'Monitoring');
+
+  if (panicFinding || errorLogFinding) {
+    groups.push(
+      createFindingGroup({
+        id: 'longhorn-manager-stability',
+        severity: highestSeverity([panicFinding, errorLogFinding]),
+        title: panicFinding ? 'Longhorn manager stability needs attention' : 'Longhorn manager logs contain errors',
+        description:
+          'Longhorn manager is the main reconciliation loop. Panics or sustained error logs can explain stale volume, replica, or instance-manager state.',
+        impact:
+          'Management operations may fail or lag, and secondary symptoms can appear across volumes, replicas, and webhooks.',
+        affected: compactEvidence([
+          panicFinding ? affectedMetric('Panics', panicFinding.count) : null,
+          errorLogFinding ? affectedMetric('Error lines', errorLogFinding.count) : null,
+          longhorn.logs?.scannedFiles ? affectedMetric('Log files scanned', longhorn.logs.scannedFiles) : null,
+        ]),
+        recommendedChecks: [
+          'Inspect the panic stack traces and the first surrounding manager log lines.',
+          'Compare the Longhorn manager image/version against known issues for that release.',
+          'Check whether node or webhook readiness findings happened at the same time.',
+        ],
+        evidence: mergeEvidence([panicFinding, errorLogFinding]),
+        relatedFindingIds: findingIds([panicFinding, errorLogFinding]),
+      }),
+    );
+  }
+
+  if (longhorn.volumes?.unhealthy || longhorn.replicas?.notRunning) {
+    groups.push(
+      createFindingGroup({
+        id: 'longhorn-volume-replica-health',
+        severity: highestSeverity([...volumeFindings, ...replicaFindings]),
+        title: 'Volume and replica health are correlated',
+        description:
+          'Longhorn reports unhealthy volumes or replicas that are not running. These are usually related and should be investigated together.',
+        impact:
+          'Affected workloads may see degraded redundancy, attach problems, or recovery operations that cannot finish.',
+        affected: compactEvidence([
+          affectedMetric('Unhealthy volumes', longhorn.volumes?.unhealthy),
+          affectedMetric('Replicas not running', longhorn.replicas?.notRunning),
+          affectedMetric('Total volumes', longhorn.volumes?.total),
+          affectedMetric('Total replicas', longhorn.replicas?.total),
+        ]),
+        recommendedChecks: [
+          'Open the listed volume and replica YAML evidence together.',
+          'Confirm whether the stopped replicas belong to the unhealthy volumes.',
+          'Check node scheduling, disk capacity, and replica rebuild events before forcing recovery.',
+        ],
+        evidence: mergeEvidence([...volumeFindings, ...replicaFindings]),
+        relatedFindingIds: findingIds([...volumeFindings, ...replicaFindings]),
+      }),
+    );
+  }
+
+  if (storageFinding) {
+    groups.push(
+      createFindingGroup({
+        id: 'longhorn-replica-scheduling-capacity',
+        severity: storageFinding.severity,
+        title: 'Replica scheduling is constrained by capacity or disk availability',
+        description:
+          'Manager logs show replica creation prechecks failing because candidate disks or nodes were not usable.',
+        impact:
+          'Longhorn may be unable to restore the desired replica count, keeping volumes degraded or rebuilds stuck.',
+        affected: compactEvidence([
+          affectedMetric('Scheduling log matches', storageFinding.count),
+          affectedMetric('Replicas not running', longhorn.replicas?.notRunning),
+          affectedMetric('Problematic nodes', longhorn.nodes?.problematic),
+        ]),
+        recommendedChecks: [
+          'Review free space, reserved space, disk tags, node selectors, and disabled scheduling on Longhorn nodes.',
+          'Compare the affected volume size with available disk capacity on candidate nodes.',
+          'Resolve node prerequisite findings before retrying replica scheduling.',
+        ],
+        evidence: mergeEvidence([storageFinding]),
+        relatedFindingIds: findingIds([storageFinding]),
+      }),
+    );
+  }
+
+  if (nodeFindings.length) {
+    groups.push(
+      createFindingGroup({
+        id: 'longhorn-node-prerequisites',
+        severity: highestSeverity(nodeFindings),
+        title: 'Longhorn node prerequisites are not satisfied',
+        description:
+          'One or more Longhorn node conditions indicate missing packages, missing kernel modules, readiness problems, or host services that affect Longhorn.',
+        impact:
+          'Longhorn may avoid scheduling replicas on those nodes, fail storage operations, or report degraded redundancy.',
+        affected: compactEvidence([
+          affectedMetric('Problematic nodes', longhorn.nodes?.problematic),
+          affectedMetric('Total Longhorn nodes', longhorn.nodes?.total),
+          affectedMetric('Node findings', nodeFindings.length),
+        ]),
+        recommendedChecks: [
+          'Install or repair the missing required packages reported in nodes.yaml.',
+          'Load required kernel modules or adjust Longhorn settings if the feature is intentionally unused.',
+          'Investigate multipathd findings before attaching or rebuilding volumes on affected nodes.',
+        ],
+        evidence: mergeEvidence(nodeFindings),
+        relatedFindingIds: findingIds(nodeFindings),
+      }),
+    );
+  }
+
+  if (webhookFinding || csiFinding) {
+    groups.push(
+      createFindingGroup({
+        id: 'longhorn-control-plane-endpoints',
+        severity: highestSeverity([webhookFinding, csiFinding]),
+        title: 'Longhorn control-plane endpoints had connection failures',
+        description:
+          'Logs show local webhook or CSI socket connection failures. These often occur during startup, but repeated matches can affect reconciliation and Kubernetes storage calls.',
+        impact:
+          'Admission, conversion, or CSI operations may temporarily fail until the related endpoint becomes healthy.',
+        affected: compactEvidence([
+          webhookFinding ? affectedMetric('Webhook matches', webhookFinding.count) : null,
+          csiFinding ? affectedMetric('CSI socket matches', csiFinding.count) : null,
+        ]),
+        recommendedChecks: [
+          'Check whether the endpoint errors align with pod restarts or manager startup windows.',
+          'Verify webhook and CSI sidecar pods are Ready after the error window.',
+        ],
+        evidence: mergeEvidence([webhookFinding, csiFinding]),
+        relatedFindingIds: findingIds([webhookFinding, csiFinding]),
+      }),
+    );
+  }
+
+  if (podRestartFinding) {
+    groups.push(
+      createFindingGroup({
+        id: 'longhorn-pod-restarts',
+        severity: podRestartFinding.severity,
+        title: 'Longhorn pods restarted during the captured window',
+        description:
+          'Non-zero restart counts can explain transient connection errors, missing logs, or control-plane churn.',
+        impact:
+          'Repeated restarts can interrupt CSI, manager, engine image, or instance-manager responsibilities.',
+        affected: compactEvidence([
+          affectedMetric('Pods with restarts', longhorn.pods?.withRestarts),
+          affectedMetric('Total Longhorn pods', longhorn.pods?.total),
+        ]),
+        recommendedChecks: [
+          'Review restart counts alongside manager panic and endpoint findings.',
+          'Open the pod YAML and related container logs for the highest restart counts first.',
+        ],
+        evidence: mergeEvidence([podRestartFinding]),
+        relatedFindingIds: findingIds([podRestartFinding]),
+      }),
+    );
+  }
+
+  if (monitoringFindings.length) {
+    groups.push(
+      createFindingGroup({
+        id: 'longhorn-monitoring-alerts',
+        severity: highestSeverity(monitoringFindings),
+        title: 'Monitoring alerts were firing',
+        description:
+          'The bundle includes firing Prometheus alerts with actionable severity labels.',
+        impact:
+          'Alertmanager already detected symptoms that should be compared with the Longhorn resource state.',
+        affected: [affectedMetric('Firing alerts', monitoringFindings.length)],
+        recommendedChecks: [
+          'Compare alert timestamps with Longhorn manager and Kubernetes event timelines.',
+          'Use the alert runbook URL when one is present in prometheus-alerts.json.',
+        ],
+        evidence: mergeEvidence(monitoringFindings),
+        relatedFindingIds: findingIds(monitoringFindings),
+      }),
+    );
+  }
+
+  if (collectionFinding) {
+    groups.push(
+      createFindingGroup({
+        id: 'longhorn-collection-gaps',
+        severity: collectionFinding.severity,
+        title: 'Support bundle has collection gaps',
+        description:
+          'The support bundle generator could not collect every requested API resource or pod log.',
+        impact:
+          'The report can still be useful, but absence of a log or resource should not be treated as proof that it was healthy.',
+        affected: [affectedMetric('Collection errors', collectionFinding.count)],
+        recommendedChecks: [
+          'Review bundleGenerationError.log before concluding a resource was unavailable.',
+          'If a missing log is central to the case, collect a fresh bundle or query that pod directly.',
+        ],
+        evidence: mergeEvidence([collectionFinding]),
+        relatedFindingIds: findingIds([collectionFinding]),
+      }),
+    );
+  }
+
+  return sortFindingGroups(groups);
 }
 
 async function readSupportBundleMetadata(context) {
@@ -829,6 +1065,30 @@ function createFinding({ id, severity, category, title, description, evidence = 
   };
 }
 
+function createFindingGroup({
+  id,
+  severity,
+  title,
+  description,
+  impact,
+  affected = [],
+  recommendedChecks = [],
+  evidence = [],
+  relatedFindingIds = [],
+}) {
+  return {
+    id,
+    severity,
+    title,
+    description,
+    impact,
+    affected,
+    recommendedChecks,
+    evidence,
+    relatedFindingIds,
+  };
+}
+
 function conditionEvidence(condition) {
   return compactEvidence([
     `Type: ${condition.type}`,
@@ -879,6 +1139,70 @@ function sortFindings(findings) {
       a.category.localeCompare(b.category) ||
       a.title.localeCompare(b.title),
   );
+}
+
+function sortFindingGroups(groups) {
+  const severityRank = {
+    critical: 0,
+    warning: 1,
+    info: 2,
+  };
+
+  return [...groups].sort(
+    (a, b) => severityRank[a.severity] - severityRank[b.severity] || a.title.localeCompare(b.title),
+  );
+}
+
+function findFinding(findings, id) {
+  return findings.find((finding) => finding.id === id) ?? null;
+}
+
+function findingIds(findings) {
+  return findings
+    .filter(Boolean)
+    .map((finding) => finding.id);
+}
+
+function highestSeverity(findings) {
+  const severities = findings
+    .filter(Boolean)
+    .map((finding) => finding.severity);
+
+  if (severities.includes('critical')) {
+    return 'critical';
+  }
+
+  if (severities.includes('warning')) {
+    return 'warning';
+  }
+
+  return 'info';
+}
+
+function mergeEvidence(findings) {
+  const evidence = [];
+
+  for (const finding of findings.filter(Boolean)) {
+    if (finding.count && finding.count > 1) {
+      evidence.push(`${finding.title}: ${finding.count} matches`);
+    }
+
+    if (finding.evidence?.length) {
+      evidence.push(...finding.evidence);
+    } else if (finding.path) {
+      evidence.push(`${finding.title}: ${finding.path}`);
+    }
+  }
+
+  return [...new Set(evidence)].slice(0, 8);
+}
+
+function affectedMetric(label, value) {
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+
+  return `${label}: ${value}`;
 }
 
 function mapAlertSeverity(severity) {

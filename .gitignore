@@ -3,6 +3,7 @@ node_modules/
 .env
 data/bundles/**
 data/metadata/**
+data/kb/**
 data/work/**
 !data/bundles/.gitkeep
 !data/metadata/.gitkeep

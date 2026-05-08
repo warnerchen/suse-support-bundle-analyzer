@@ -46,7 +46,8 @@ body.modal-open {
 }
 
 button,
-input {
+input,
+textarea {
   font: inherit;
 }
 
@@ -135,7 +136,8 @@ h2 {
 }
 
 .upload-panel,
-.table-panel {
+.table-panel,
+.kb-panel {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.92);
@@ -148,6 +150,11 @@ h2 {
 
 .table-panel {
   overflow: hidden;
+}
+
+.kb-panel {
+  grid-column: 1 / -1;
+  padding: 22px;
 }
 
 .panel-heading {
@@ -348,6 +355,11 @@ legend {
   font-weight: 700;
 }
 
+.form-message.warning {
+  color: #79510a;
+  font-weight: 700;
+}
+
 .primary-button,
 .icon-button {
   display: inline-flex;
@@ -398,6 +410,110 @@ legend {
 .table-panel .panel-heading {
   margin: 0;
   padding: 20px 20px 16px;
+}
+
+.kb-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 428px);
+  gap: 16px;
+  align-items: start;
+}
+
+.kb-import-form,
+.kb-status-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.kb-field-label {
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 800;
+}
+
+.kb-import-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 104px;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.kb-import-form textarea {
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfb;
+  color: var(--text);
+  line-height: 1.45;
+  padding: 12px;
+}
+
+.kb-import-form textarea:focus {
+  outline: 2px solid rgba(11, 127, 79, 0.2);
+  border-color: rgba(11, 127, 79, 0.45);
+}
+
+.kb-import-button {
+  align-self: stretch;
+  min-height: 96px;
+}
+
+.kb-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  align-content: start;
+  min-height: 96px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfb;
+  padding: 10px;
+}
+
+.kb-stats .empty-report {
+  grid-column: 1 / -1;
+  align-self: center;
+}
+
+.kb-stat {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px 11px;
+}
+
+.kb-stat strong,
+.kb-stat span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-stat strong {
+  color: var(--green-dark);
+  font-size: 1rem;
+  font-weight: 850;
+}
+
+.kb-stat span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.kb-updated {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 700;
+  padding: 0 2px;
 }
 
 .table-wrap {
@@ -714,10 +830,12 @@ td {
   margin-bottom: 12px;
 }
 
+.finding-groups-section,
 .findings-section {
   margin-bottom: 24px;
 }
 
+.finding-groups-section h3,
 .findings-section h3,
 .report-grid h3,
 .report-files h3 {
@@ -728,6 +846,7 @@ td {
   text-transform: uppercase;
 }
 
+.finding-groups-section h3,
 .findings-section h3 {
   color: var(--text);
   font-size: 1rem;
@@ -766,12 +885,21 @@ td {
   background: var(--green);
 }
 
+.finding-group-list,
 .finding-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 12px;
 }
 
+.finding-group-list {
+  grid-template-columns: 1fr;
+}
+
+.finding-list {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.finding-group-card,
 .finding-card {
   display: grid;
   gap: 8px;
@@ -781,6 +909,11 @@ td {
   border-radius: 8px;
   background: #ffffff;
   padding: 14px;
+}
+
+.finding-group-card {
+  gap: 10px;
+  background: #fbfcfb;
 }
 
 .finding-critical {
@@ -839,17 +972,145 @@ td {
   white-space: nowrap;
 }
 
+.finding-group-card h4,
 .finding-card h4 {
   margin: 0;
   font-size: 0.98rem;
   line-height: 1.25;
 }
 
+.finding-group-card h4 {
+  font-size: 1.04rem;
+}
+
+.finding-group-card p,
 .finding-card p {
   margin: 0;
   color: var(--muted);
   font-size: 0.88rem;
   line-height: 1.45;
+}
+
+.finding-impact {
+  border-radius: 8px;
+  background: #eef3f0;
+  color: var(--text);
+  font-size: 0.86rem;
+  font-weight: 700;
+  line-height: 1.4;
+  padding: 9px 10px;
+}
+
+.group-affected {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(126px, 1fr));
+  gap: 8px;
+}
+
+.group-affected span {
+  display: grid;
+  gap: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 9px 10px;
+}
+
+.group-affected small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.group-affected strong {
+  color: var(--green-dark);
+  font-size: 1rem;
+}
+
+.recommended-checks {
+  display: grid;
+  gap: 6px;
+}
+
+.recommended-checks h5 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.recommended-checks ul {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text);
+  font-size: 0.83rem;
+  line-height: 1.35;
+}
+
+.recommended-checks li {
+  overflow-wrap: anywhere;
+}
+
+.related-kb {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #d9e2dd;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.related-kb h5 {
+  margin: 0;
+  color: var(--green-dark);
+  font-size: 0.75rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.related-kb ul {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.related-kb li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 10px;
+}
+
+.related-kb a {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--green-dark);
+  font-size: 0.86rem;
+  font-weight: 850;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+
+.related-kb span {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.related-kb p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.38;
 }
 
 .finding-evidence {
@@ -982,8 +1243,13 @@ td {
   .report-summary,
   .report-grid,
   .finding-list,
+  .kb-layout,
   .inventory-list {
     grid-template-columns: 1fr;
+  }
+
+  .kb-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -1015,8 +1281,20 @@ td {
     grid-template-columns: 1fr;
   }
 
+  .kb-import-control {
+    grid-template-columns: 1fr;
+  }
+
+  .kb-import-button {
+    min-height: 44px;
+  }
+
   .primary-button {
     width: 100%;
+  }
+
+  .kb-stats {
+    grid-template-columns: 1fr;
   }
 
   .delete-modal {

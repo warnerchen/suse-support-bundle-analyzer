@@ -17,6 +17,11 @@ const deleteModalFilename = document.querySelector('#deleteModalFilename');
 const deleteModalMessage = document.querySelector('#deleteModalMessage');
 const cancelDeleteButton = document.querySelector('#cancelDeleteButton');
 const confirmDeleteButton = document.querySelector('#confirmDeleteButton');
+const kbImportForm = document.querySelector('#kbImportForm');
+const kbUrlInput = document.querySelector('#kbUrlInput');
+const kbImportButton = document.querySelector('#kbImportButton');
+const kbMessage = document.querySelector('#kbMessage');
+const kbStats = document.querySelector('#kbStats');
 
 let maxUploadBytes = 0;
 let pollTimer = null;
@@ -39,7 +44,7 @@ async function initialize() {
     maxUploadBytes = payload.maxUploadBytes;
     uploadLimit.textContent = `Limit ${formatBytes(maxUploadBytes)}`;
     setApiStatus('Ready', 'ready');
-    await refreshDashboard();
+    await Promise.all([refreshDashboard(), loadKbStatus()]);
   } catch (error) {
     setApiStatus('API offline', 'error');
     setFormMessage(error.message, 'error');
@@ -85,6 +90,7 @@ function bindEvents() {
 
   refreshButton.addEventListener('click', refreshDashboard);
   form.addEventListener('submit', uploadBundle);
+  kbImportForm.addEventListener('submit', importKbUrls);
   bundleRows.addEventListener('click', (event) => {
     const reportButton = event.target.closest('[data-report-job-id]');
 
@@ -177,6 +183,73 @@ async function uploadBundle(event) {
     setProgress(0);
   } finally {
     submitButton.disabled = false;
+  }
+}
+
+async function loadKbStatus() {
+  try {
+    const response = await fetch('/api/kb/status');
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error?.message ?? 'Unable to load KB status.');
+    }
+
+    renderKbStatus(payload.kb);
+  } catch (error) {
+    setKbMessage(error.message, 'error');
+    kbStats.innerHTML = '<p class="empty-report">KB status unavailable</p>';
+  }
+}
+
+async function importKbUrls(event) {
+  event.preventDefault();
+
+  const urls = kbUrlInput.value
+    .split(/\s+/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  if (!urls.length) {
+    setKbMessage('Enter at least one KB URL.', 'error');
+    return;
+  }
+
+  kbImportButton.disabled = true;
+  setKbMessage('Importing KB');
+
+  try {
+    const response = await fetch('/api/kb/import-url', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ urls }),
+    });
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error?.message ?? 'KB import failed.');
+    }
+
+    const imported = payload.import?.documentsImported ?? 0;
+    const chunks = payload.import?.chunksIndexed ?? 0;
+    const failureCount = payload.import?.failures?.length ?? 0;
+    setKbMessage(
+      `Imported ${imported} document${imported === 1 ? '' : 's'} and indexed ${chunks} chunk${chunks === 1 ? '' : 's'}${
+        failureCount ? `; ${failureCount} failed` : ''
+      }`,
+      failureCount ? 'warning' : 'success',
+    );
+    renderKbStatus(payload.kb);
+
+    if (reportContent.dataset.jobId) {
+      await loadReport(reportContent.dataset.jobId);
+    }
+  } catch (error) {
+    setKbMessage(error.message, 'error');
+  } finally {
+    kbImportButton.disabled = false;
   }
 }
 
@@ -287,6 +360,38 @@ function renderBundles(bundles, analysisJobsByBundleId) {
       `;
     })
     .join('');
+}
+
+function renderKbStatus(kb = {}) {
+  const documentCount = kb.documentCount ?? 0;
+  const chunkCount = kb.chunkCount ?? 0;
+
+  if (!documentCount) {
+    kbStats.innerHTML = `
+      <div class="kb-stat">
+        <strong>0</strong>
+        <span>Documents</span>
+      </div>
+      <p class="empty-report">No KB imported yet</p>
+    `;
+    return;
+  }
+
+  kbStats.innerHTML = `
+    <div class="kb-stat">
+      <strong>${documentCount}</strong>
+      <span>Documents</span>
+    </div>
+    <div class="kb-stat">
+      <strong>${chunkCount}</strong>
+      <span>Chunks</span>
+    </div>
+    <div class="kb-stat">
+      <strong>${escapeHtml(kb.embedding?.provider ?? 'unknown')}</strong>
+      <span>${escapeHtml(String(kb.embedding?.dimensions ?? ''))} dims</span>
+    </div>
+    <div class="kb-updated">Updated ${escapeHtml(formatDate(kb.updatedAt))}</div>
+  `;
 }
 
 function renderAnalysisStatus(job) {
@@ -417,13 +522,21 @@ function setDeleteModalMessage(message, state) {
 
 function clearReport() {
   delete reportContent.dataset.bundleId;
+  delete reportContent.dataset.jobId;
   reportContent.innerHTML = '<p class="empty-report">Completed analysis reports will appear here.</p>';
 }
 
 function renderReport(report) {
   reportContent.dataset.bundleId = report.bundleId;
+  reportContent.dataset.jobId = report.jobId;
   const summary = report.summary;
   const findingSummary = report.findingSummary ?? {
+    total: 0,
+    critical: 0,
+    warning: 0,
+    info: 0,
+  };
+  const groupSummary = report.groupSummary ?? {
     total: 0,
     critical: 0,
     warning: 0,
@@ -432,6 +545,10 @@ function renderReport(report) {
 
   reportContent.innerHTML = `
     <div class="report-summary">
+      <div class="metric">
+        <span class="metric-value">${groupSummary.total}</span>
+        <span class="metric-label">Groups</span>
+      </div>
       <div class="metric">
         <span class="metric-value">${findingSummary.total}</span>
         <span class="metric-label">Findings</span>
@@ -452,9 +569,11 @@ function renderReport(report) {
         <span class="metric-value">${summary.totalEntries}</span>
         <span class="metric-label">Entries</span>
       </div>
+      ${renderKbMetric(report.kbSummary)}
     </div>
 
-    ${renderFindings(report.findings ?? [], findingSummary)}
+    ${renderFindingGroups(report.findingGroups ?? [], groupSummary)}
+    ${renderFindings(report.findings ?? [], findingSummary, report.findingGroups?.length)}
 
     <div class="report-grid">
       <div>
@@ -488,13 +607,131 @@ function renderReport(report) {
   `;
 }
 
-function renderFindings(findings, summary) {
+function renderFindingGroups(groups, summary) {
+  return `
+    <section class="finding-groups-section" aria-labelledby="findingGroupsTitle">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Correlation</p>
+          <h3 id="findingGroupsTitle">Grouped Findings</h3>
+        </div>
+        <div class="finding-summary" aria-label="Finding group severity summary">
+          <span class="severity-dot critical"></span>${summary.critical}
+          <span class="severity-dot warning"></span>${summary.warning}
+          <span class="severity-dot info"></span>${summary.info}
+        </div>
+      </div>
+      ${
+        groups.length
+          ? `<div class="finding-group-list">${groups.map(renderFindingGroup).join('')}</div>`
+          : '<p class="empty-report">No correlated finding groups detected.</p>'
+      }
+    </section>
+  `;
+}
+
+function renderFindingGroup(group) {
+  return `
+    <article class="finding-group-card finding-${escapeHtml(group.severity)}">
+      <div class="finding-card-header">
+        <span class="finding-severity">${escapeHtml(group.severity)}</span>
+        <span class="finding-category">${escapeHtml(group.relatedFindingIds?.length ?? 0)} linked findings</span>
+      </div>
+      <h4>${escapeHtml(group.title)}</h4>
+      <p>${escapeHtml(group.description)}</p>
+      <div class="finding-impact">${escapeHtml(group.impact)}</div>
+      ${renderGroupAffected(group.affected)}
+      ${renderRecommendedChecks(group.recommendedChecks)}
+      ${renderRelatedKb(group.relatedKb)}
+      ${renderFindingEvidence(group.evidence)}
+    </article>
+  `;
+}
+
+function renderKbMetric(summary = {}) {
+  if (!summary.documentCount) {
+    return '';
+  }
+
+  return `
+    <div class="metric">
+      <span class="metric-value">${summary.documentCount}</span>
+      <span class="metric-label">KB Docs</span>
+    </div>
+  `;
+}
+
+function renderGroupAffected(affected = []) {
+  if (!affected.length) {
+    return '';
+  }
+
+  return `
+    <div class="group-affected">
+      ${affected
+        .map((item) => {
+          const [label, value = ''] = String(item).split(/:\s*/, 2);
+          return `
+            <span>
+              <small>${escapeHtml(label)}</small>
+              <strong>${escapeHtml(value)}</strong>
+            </span>
+          `;
+        })
+        .join('')}
+    </div>
+  `;
+}
+
+function renderRecommendedChecks(checks = []) {
+  if (!checks.length) {
+    return '';
+  }
+
+  return `
+    <div class="recommended-checks">
+      <h5>Recommended Checks</h5>
+      <ul>
+        ${checks.map((check) => `<li>${escapeHtml(check)}</li>`).join('')}
+      </ul>
+    </div>
+  `;
+}
+
+function renderRelatedKb(articles = []) {
+  if (!articles.length) {
+    return '';
+  }
+
+  return `
+    <div class="related-kb">
+      <h5>Related KB</h5>
+      <ul>
+        ${articles
+          .map(
+            (article) => `
+              <li>
+                <a href="${escapeHtml(article.sourceUri)}" target="_blank" rel="noreferrer">
+                  ${escapeHtml(article.title)}
+                </a>
+                <span>${escapeHtml(formatKbScore(article.score))}</span>
+                <p>${escapeHtml(article.excerpt)}</p>
+              </li>
+            `,
+          )
+          .join('')}
+      </ul>
+    </div>
+  `;
+}
+
+function renderFindings(findings, summary, hasGroups = false) {
   return `
     <section class="findings-section" aria-labelledby="findingsTitle">
       <div class="section-heading">
         <div>
           <p class="eyebrow">Diagnostics</p>
-          <h3 id="findingsTitle">Findings</h3>
+          <h3 id="findingsTitle">${hasGroups ? 'Finding Details' : 'Findings'}</h3>
         </div>
         <div class="finding-summary" aria-label="Finding severity summary">
           <span class="severity-dot critical"></span>${summary.critical}
@@ -653,6 +890,15 @@ function setFormMessage(message, state) {
   }
 }
 
+function setKbMessage(message, state) {
+  kbMessage.textContent = message;
+  kbMessage.classList.remove('error', 'success', 'warning');
+
+  if (state) {
+    kbMessage.classList.add(state);
+  }
+}
+
 function setProgress(value) {
   progressBar.style.width = `${value}%`;
 }
@@ -674,6 +920,14 @@ function formatDate(value) {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(value));
+}
+
+function formatKbScore(score) {
+  if (!Number.isFinite(score)) {
+    return 'match';
+  }
+
+  return `${Math.round(score * 100)}% match`;
 }
 
 function escapeHtml(value) {

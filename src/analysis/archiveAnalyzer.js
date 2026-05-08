@@ -72,6 +72,8 @@ export class ArchiveAnalyzer {
       },
       summary,
       inventory: productAnalysis.inventory,
+      groupSummary: productAnalysis.groupSummary,
+      findingGroups: productAnalysis.findingGroups,
       findingSummary: productAnalysis.findingSummary,
       findings: productAnalysis.findings,
       topLevelEntries: summarizeTopLevelEntries(index),
@@ -95,6 +97,13 @@ async function analyzeProductBundle({ productType, extractDir, index }) {
 
   return {
     inventory: {},
+    groupSummary: {
+      total: 0,
+      critical: 0,
+      warning: 0,
+      info: 0,
+    },
+    findingGroups: [],
     findingSummary: {
       total: 0,
       critical: 0,

@@ -1,6 +1,6 @@
 # SUSE Support Bundle Analyzer
 
-First working version of a web application for Technical Support Engineers to upload product support bundles and choose the product analyzer scope.
+Web application for Technical Support Engineers to upload product support bundles, run product-specific analysis, and connect findings with an imported knowledge base.
 
 Current scope:
 
@@ -9,6 +9,9 @@ Current scope:
 - Save the uploaded bundle to an NFS-backed filesystem path
 - Create an analysis job automatically after upload
 - Safely extract common archive formats and generate a file index report
+- Run Longhorn inventory checks, finding correlation, and grouped diagnostics
+- Import Longhorn KB URLs from the UI and store a local vector index
+- Show related KB articles on correlated Longhorn findings
 - Persist bundle metadata as JSON
 - Show recent uploads in the UI
 
@@ -36,6 +39,12 @@ You can override the port and data location:
 PORT=4000 DATA_DIR=/path/to/data npm run dev
 ```
 
+KB storage and import behavior can also be configured:
+
+```bash
+KB_STORAGE_DIR=/path/to/kb KB_REMOTE_IMPORT_LIMIT=100 KB_EMBEDDING_DIMENSIONS=256 npm run dev
+```
+
 For a production-like NFS setup, mount the NFS export first, then point the app at that mount path:
 
 ```bash
@@ -52,6 +61,8 @@ The application stores bundle files under `BUNDLE_STORAGE_DIR`. In development, 
 data/
   bundles/
     {bundle_id}/{original_filename}
+  kb/
+    kb-index.json
   metadata/
     bundles.json
     analysis-jobs.json
@@ -71,8 +82,11 @@ For NFS, the recommended production layout is:
   {bundle_id}/{original_filename}
 
 /var/lib/suse-support-bundle-analyzer/
+  kb/kb-index.json
   metadata/bundles.json
 ```
+
+The KB index stores normalized article metadata, text chunks, and local hash vectors. It is intentionally stored outside git because imported KB content can change independently from the application code.
 
 ## API
 
@@ -120,10 +134,34 @@ Returns one analysis job.
 
 ### `GET /api/analysis-jobs/{id}/report`
 
-Returns the generated safe-extraction file index report for a completed analysis job.
+Returns the generated safe-extraction file index report for a completed analysis job. If KB data has been imported, Longhorn finding groups include related KB matches.
+
+### `GET /api/kb/status`
+
+Returns local KB index status, including document count, chunk count, embedding provider, and source metadata.
+
+### `POST /api/kb/import-url`
+
+Imports one or more KB URLs and rebuilds matching local vector chunks. Passing the Longhorn KB index URL expands all article links found under `/kb/`.
+
+JSON body:
+
+```json
+{
+  "urls": ["https://longhorn.io/kb/"]
+}
+```
+
+### `GET /api/kb/search?q={query}`
+
+Searches the local KB vector index. Optional query parameters:
+
+- `productType`: product filter, for example `longhorn`
+- `limit`: result count from `1` to `20`
 
 ## Next Steps
 
-- Add product-specific analyzers for Longhorn and Harvester
+- Add Harvester-specific findings and KB matching
+- Add a pluggable semantic embedding provider for richer KB matching
 - Add authentication, retention policies, and sensitive-data scanning before analysis
 - Move metadata from JSON to PostgreSQL once multiple app instances or workers are introduced

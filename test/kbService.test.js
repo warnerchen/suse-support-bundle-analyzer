@@ -1,0 +1,184 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { KbService } from '../src/kb/kbService.js';
+import { KbStore } from '../src/kb/kbStore.js';
+import { extractKbLinks, normalizeKbDocument } from '../src/kb/kbText.js';
+import { LocalEmbeddingProvider } from '../src/kb/localEmbeddingProvider.js';
+
+test('extracts Longhorn KB article links from an index page', () => {
+  const links = extractKbLinks(
+    [
+      '<a href="/kb/troubleshooting-volume-pvc-xxx-not-scheduled/">Scheduled</a>',
+      '<a href="https://longhorn.io/kb/manual-recovery-of-nodes-with-insufficient-space/">Recovery</a>',
+      '<a href="/docs/1.11.2/">Docs</a>',
+      '<a href="/kb/">Index</a>',
+    ].join('\n'),
+    'https://longhorn.io/kb/',
+  );
+
+  assert.deepEqual(links, [
+    'https://longhorn.io/kb/manual-recovery-of-nodes-with-insufficient-space/',
+    'https://longhorn.io/kb/troubleshooting-volume-pvc-xxx-not-scheduled/',
+  ]);
+});
+
+test('imports KB URLs and searches the local vector index', async () => {
+  const storageDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kb-store-'));
+
+  try {
+    const service = new KbService({
+      store: new KbStore({
+        storageDir,
+        embeddingProvider: new LocalEmbeddingProvider({ dimensions: 64 }),
+      }),
+      fetchImpl: fixtureFetch({
+        'https://longhorn.io/kb/': `
+          <html><body>
+            <table>
+              <tr><td><a href="/kb/troubleshooting-volume-pvc-xxx-not-scheduled/">Troubleshooting volume not scheduled</a></td></tr>
+              <tr><td><a href="/kb/troubleshooting-manager-stuck-in-crash-loop-state-due-to-inaccessible-webhook/">Manager CrashLoopBackOff</a></td></tr>
+            </table>
+          </body></html>
+        `,
+        'https://longhorn.io/kb/troubleshooting-volume-pvc-xxx-not-scheduled/': longhornArticleHtml({
+          title: 'Troubleshooting: `volume pvc-xxx not scheduled`',
+          body: [
+            '<h2>Symptoms</h2>',
+            '<p>The Pod cannot start because the Longhorn volume is not scheduled.</p>',
+            '<h2>Details</h2>',
+            '<p>This is caused by Longhorn not finding enough space on different nodes to store replicas.</p>',
+            '<p>Check replica count, node level soft anti-affinity, disk scheduling, and available storage.</p>',
+          ].join('\n'),
+        }),
+        'https://longhorn.io/kb/troubleshooting-manager-stuck-in-crash-loop-state-due-to-inaccessible-webhook/':
+          longhornArticleHtml({
+            title: 'Troubleshooting: Longhorn Manager Stuck in CrashLoopBackOff State Due to Inaccessible Webhook',
+            body: [
+              '<h2>Symptoms</h2>',
+              '<p>Longhorn manager can crash when webhook endpoints are inaccessible.</p>',
+              '<h2>Details</h2>',
+              '<p>Inspect webhook readiness, service endpoints, and manager logs.</p>',
+            ].join('\n'),
+          }),
+      }),
+      importLimit: 10,
+    });
+
+    await service.ensureReady();
+    const result = await service.importFromUrls(['https://longhorn.io/kb/']);
+
+    assert.equal(result.documentsImported, 2);
+    assert.ok(result.chunksIndexed >= 2);
+
+    const matches = await service.search('replica scheduling insufficient storage not scheduled', {
+      productType: 'longhorn',
+      limit: 2,
+    });
+
+    assert.equal(matches[0].title, 'Troubleshooting: `volume pvc-xxx not scheduled`');
+  } finally {
+    await fs.rm(storageDir, { recursive: true, force: true });
+  }
+});
+
+test('enriches finding groups with related KB matches', async () => {
+  const storageDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kb-enrich-'));
+
+  try {
+    const store = new KbStore({
+      storageDir,
+      embeddingProvider: new LocalEmbeddingProvider({ dimensions: 64 }),
+    });
+    await store.ensureReady();
+    await store.upsertDocuments([
+      normalizeKbDocument({
+        sourceUri: 'https://longhorn.io/kb/troubleshooting-volume-pvc-xxx-not-scheduled/',
+        contentType: 'text/html',
+        content: longhornArticleHtml({
+          title: 'Troubleshooting: `volume pvc-xxx not scheduled`',
+          body: [
+            '<h2>Details</h2>',
+            '<p>Replica scheduling can fail when nodes do not have enough storage.</p>',
+            '<p>Review disk capacity, replica count, node selectors, and anti-affinity settings.</p>',
+          ].join('\n'),
+        }),
+      }),
+    ]);
+
+    const service = new KbService({ store });
+    const report = await service.enrichReport({
+      productType: 'longhorn',
+      inventory: {
+        metadata: {
+          issuedescription: 'volume degraded and replica scheduling failed',
+        },
+      },
+      findingGroups: [
+        {
+          id: 'longhorn-replica-scheduling-capacity',
+          title: 'Replica scheduling is constrained by capacity or disk availability',
+          description: 'Manager logs show replica creation prechecks failing because disks were not usable.',
+          impact: 'Longhorn may be unable to restore the desired replica count.',
+          affected: ['Scheduling log matches: 4'],
+          recommendedChecks: ['Review free space, reserved space, disk tags, and node selectors.'],
+          evidence: ['Precheck failed for creating new replica: insufficient storage'],
+          relatedFindingIds: ['longhorn-log-replica-scheduling-storage'],
+        },
+      ],
+      findings: [
+        {
+          id: 'longhorn-log-replica-scheduling-storage',
+          title: 'Replica scheduling is hitting storage pressure',
+          description: 'Replica creation precheck failures related to insufficient disk space.',
+          evidence: ['insufficient storage'],
+        },
+      ],
+    });
+
+    assert.equal(report.kbSummary.enabled, true);
+    assert.equal(report.findingGroups[0].relatedKb[0].title, 'Troubleshooting: `volume pvc-xxx not scheduled`');
+  } finally {
+    await fs.rm(storageDir, { recursive: true, force: true });
+  }
+});
+
+function fixtureFetch(pages) {
+  return async (url) => {
+    const body = pages[url];
+
+    if (!body) {
+      return new Response('not found', { status: 404 });
+    }
+
+    return new Response(body, {
+      status: 200,
+      headers: {
+        'content-type': 'text/html; charset=utf-8',
+      },
+    });
+  };
+}
+
+function longhornArticleHtml({ title, body }) {
+  return `
+    <html>
+      <head><title>${title} | The Longhorn Knowledge Base</title></head>
+      <body>
+        <section class="hero"><div class="docs-content"><p class="title">${title}</p></div></section>
+        <section class="section">
+          <div class="docs-content">
+            <div class="content is-medium has-extra-bottom-padding">
+              <h2>Applicable versions</h2>
+              <p>All Longhorn versions.</p>
+              ${body}
+            </div>
+          </div>
+          <a class="button is-primary" href="..">Back to Knowledge Base</a>
+        </section>
+      </body>
+    </html>
+  `;
+}

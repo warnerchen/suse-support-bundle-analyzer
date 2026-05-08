@@ -18,6 +18,9 @@ export const CREATE_BUNDLE_STORAGE_DIR = !process.env.BUNDLE_STORAGE_DIR;
 export const ANALYSIS_WORK_DIR = process.env.ANALYSIS_WORK_DIR
   ? path.resolve(process.env.ANALYSIS_WORK_DIR)
   : path.join(DATA_DIR, 'work');
+export const KB_STORAGE_DIR = process.env.KB_STORAGE_DIR
+  ? path.resolve(process.env.KB_STORAGE_DIR)
+  : path.join(DATA_DIR, 'kb');
 
 export const PORT = Number.parseInt(process.env.PORT ?? '3000', 10);
 export const HOST = process.env.HOST ?? '127.0.0.1';
@@ -35,6 +38,22 @@ export const MAX_EXTRACTED_BYTES = Number.parseInt(
 );
 export const MAX_REPORT_FILE_ENTRIES = Number.parseInt(
   process.env.MAX_REPORT_FILE_ENTRIES ?? '5000',
+  10,
+);
+export const KB_EMBEDDING_DIMENSIONS = Number.parseInt(
+  process.env.KB_EMBEDDING_DIMENSIONS ?? '256',
+  10,
+);
+export const KB_REMOTE_FETCH_TIMEOUT_MS = Number.parseInt(
+  process.env.KB_REMOTE_FETCH_TIMEOUT_MS ?? '15000',
+  10,
+);
+export const KB_REMOTE_IMPORT_LIMIT = Number.parseInt(
+  process.env.KB_REMOTE_IMPORT_LIMIT ?? '80',
+  10,
+);
+export const KB_TEXT_IMPORT_MAX_BYTES = Number.parseInt(
+  process.env.KB_TEXT_IMPORT_MAX_BYTES ?? String(2 * 1024 * 1024),
   10,
 );
 

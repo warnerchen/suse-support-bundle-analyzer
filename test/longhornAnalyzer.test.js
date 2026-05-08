@@ -105,7 +105,12 @@ test('builds Longhorn findings from support bundle files', async () => {
     assert.equal(result.inventory.longhorn.volumes.unhealthy, 1);
     assert.equal(result.inventory.longhorn.nodes.problematic, 1);
     assert.equal(result.inventory.longhorn.pods.withRestarts, 1);
+    assert.equal(result.groupSummary.total, 6);
+    assert.equal(result.groupSummary.warning, 6);
     assert.ok(result.findingSummary.warning >= 5);
+    assert.ok(result.findingGroups.some((group) => group.id === 'longhorn-volume-replica-health'));
+    assert.ok(result.findingGroups.some((group) => group.id === 'longhorn-replica-scheduling-capacity'));
+    assert.ok(result.findingGroups.some((group) => group.id === 'longhorn-node-prerequisites'));
     assert.ok(result.findings.some((finding) => finding.id === 'longhorn-bundle-generation-errors'));
     assert.ok(result.findings.some((finding) => finding.title.includes('Volume volume-a is degraded')));
     assert.ok(result.findings.some((finding) => finding.title.includes('Node node-a')));
@@ -130,7 +135,14 @@ test('returns an empty finding set when Longhorn files are absent', async () => 
       warning: 0,
       info: 0,
     });
+    assert.deepEqual(result.groupSummary, {
+      total: 0,
+      critical: 0,
+      warning: 0,
+      info: 0,
+    });
     assert.deepEqual(result.findings, []);
+    assert.deepEqual(result.findingGroups, []);
   } finally {
     await fs.rm(extractDir, { recursive: true, force: true });
   }

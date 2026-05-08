@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SUSE Support Bundle Analyzer</title>
-    <link rel="stylesheet" href="/styles.css?v=20260507-6" />
+    <link rel="stylesheet" href="/styles.css?v=20260508-2" />
   </head>
   <body>
     <div class="app-shell">
@@ -109,6 +109,32 @@
           </div>
         </section>
 
+        <section class="kb-panel" aria-labelledby="kbTitle">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Knowledge Base</p>
+              <h2 id="kbTitle">KB Vector Index</h2>
+            </div>
+          </div>
+
+          <div class="kb-layout">
+            <form id="kbImportForm" class="kb-import-form">
+              <label class="kb-field-label" for="kbUrlInput">Source URLs</label>
+              <div class="kb-import-control">
+                <textarea id="kbUrlInput" rows="3" placeholder="https://longhorn.io/kb/"></textarea>
+                <button class="primary-button kb-import-button" id="kbImportButton" type="submit">Import</button>
+              </div>
+              <p class="form-message" id="kbMessage"></p>
+            </form>
+            <div class="kb-status-panel">
+              <div class="kb-field-label">Index Status</div>
+              <div class="kb-stats" id="kbStats">
+                <p class="empty-report">Loading KB status</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section class="report-panel" id="analysisReportPanel" aria-labelledby="reportTitle">
           <div class="panel-heading">
             <div>
@@ -146,6 +172,6 @@
       </section>
     </div>
 
-    <script src="/app.js?v=20260507-3" type="module"></script>
+    <script src="/app.js?v=20260508-1" type="module"></script>
   </body>
 </html>
