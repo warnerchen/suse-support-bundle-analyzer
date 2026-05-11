@@ -3,7 +3,7 @@ import {
   KB_REMOTE_IMPORT_LIMIT,
   KB_TEXT_IMPORT_MAX_BYTES,
 } from '../config.js';
-import { extractDocumentLinks, normalizeKbDocument } from './kbText.js';
+import { chunkKbDocument, extractDocumentLinks, normalizeKbDocument } from './kbText.js';
 
 const SUPPORTED_MARKDOWN_SUFFIXES = ['.md', '.markdown'];
 const REMOTE_DOCUMENT_MIN_CHARS = 120;
@@ -50,118 +50,75 @@ export class KbService {
     return this.store.getStats();
   }
 
+  async listSources({ productType = null } = {}) {
+    return this.store.listSources({ productType });
+  }
+
+  async previewFromUrls(urls, { expandLinks = true, productType = null } = {}) {
+    const prepared = await this.#prepareUrlImport(urls, { expandLinks, productType });
+    return buildPreviewSummary(prepared);
+  }
+
   async importFromUrls(urls, { expandLinks = true, productType = null } = {}) {
-    const requestedUrls = sanitizeUrls(urls);
+    const prepared = await this.#prepareUrlImport(urls, { expandLinks, productType });
+    const importableDocuments = prepared.documents
+      .filter((entry) => entry.preview.importable)
+      .map((entry) => entry.document);
+    const blockedFailures = prepared.documents
+      .filter((entry) => !entry.preview.importable)
+      .map((entry) => ({
+        url: entry.preview.sourceUri,
+        message: entry.preview.qualityMessages[0] ?? 'Document did not pass KB quality checks.',
+      }));
 
-    if (!requestedUrls.length) {
-      throw validationError('Provide at least one KB URL to import.');
-    }
-
-    const importUrls = [];
-    const failures = [];
-
-    for (const sourceUrl of requestedUrls) {
-      try {
-        const page = await this.#fetchText(sourceUrl);
-        const links = expandLinks ? extractDocumentLinks(page.content, page.url) : [];
-
-        if (shouldExpandLinks(page.url, links, expandLinks)) {
-          importUrls.push(...links);
-        } else {
-          importUrls.push(page.url);
-        }
-      } catch (error) {
-        failures.push({ url: sourceUrl, message: error.message });
-      }
-    }
-
-    const uniqueUrls = [...new Set(importUrls)].slice(0, this.importLimit);
-    const documents = [];
-
-    for (const url of uniqueUrls) {
-      try {
-        const page = await this.#fetchText(url);
-        const document = normalizeKbDocument({
-          content: page.content,
-          sourceUri: page.url,
-          contentType: page.contentType,
-          productType,
-        });
-        const validationMessage = validateRemoteDocument(document);
-
-        if (validationMessage) {
-          failures.push({ url, message: validationMessage });
-          continue;
-        }
-
-        documents.push(document);
-      } catch (error) {
-        failures.push({ url, message: error.message });
-      }
-    }
-
-    const result = await this.store.upsertDocuments(documents);
+    const result = await this.store.upsertDocuments(importableDocuments);
 
     return {
-      requestedUrls,
-      discoveredUrls: uniqueUrls.length,
-      failures,
+      requestedUrls: prepared.requestedUrls,
+      discoveredUrls: prepared.discoveredUrls.length,
+      failures: [...prepared.failures, ...blockedFailures],
+      preview: buildPreviewSummary(prepared),
       ...result,
     };
   }
 
+  async previewFromFiles(files, { productType = null } = {}) {
+    const prepared = await this.#prepareFileImport(files, { productType });
+    return buildPreviewSummary(prepared);
+  }
+
   async importFromFiles(files, { productType = null } = {}) {
-    const fileList = Array.isArray(files) ? files : [files].filter(Boolean);
+    const prepared = await this.#prepareFileImport(files, { productType });
+    const importableDocuments = prepared.documents
+      .filter((entry) => entry.preview.importable)
+      .map((entry) => entry.document);
+    const blockedFailures = prepared.documents
+      .filter((entry) => !entry.preview.importable)
+      .map((entry) => ({
+        filename: entry.preview.filename ?? entry.preview.title,
+        message: entry.preview.qualityMessages[0] ?? 'Document did not pass KB quality checks.',
+      }));
 
-    if (!fileList.length) {
-      throw validationError('Select at least one Markdown file to import.');
-    }
-
-    const documents = [];
-    const failures = [];
-
-    for (const file of fileList) {
-      try {
-        const name = String(file.name ?? 'knowledge-base.md');
-
-        if (!isMarkdownFilename(name)) {
-          throw new Error('Only .md and .markdown files are supported.');
-        }
-
-        if (Number.isFinite(file.size) && file.size > this.maxTextBytes) {
-          throw new Error(`KB file is larger than ${this.maxTextBytes} bytes.`);
-        }
-
-        const content = await file.text();
-        const byteLength = Buffer.byteLength(content, 'utf8');
-
-        if (byteLength > this.maxTextBytes) {
-          throw new Error(`KB file is larger than ${this.maxTextBytes} bytes.`);
-        }
-
-        documents.push(
-          normalizeKbDocument({
-            content,
-            sourceUri: `uploaded://${encodeURIComponent(name)}`,
-            contentType: file.type || 'text/markdown',
-            productType,
-          }),
-        );
-      } catch (error) {
-        failures.push({
-          filename: file?.name ?? 'unknown',
-          message: error.message,
-        });
-      }
-    }
-
-    const result = await this.store.upsertDocuments(documents);
+    const result = await this.store.upsertDocuments(importableDocuments);
 
     return {
-      requestedFiles: fileList.length,
-      failures,
+      requestedFiles: prepared.requestedFiles,
+      failures: [...prepared.failures, ...blockedFailures],
+      preview: buildPreviewSummary(prepared),
       ...result,
     };
+  }
+
+  async deleteSource(id) {
+    const deleted = await this.store.deleteDocument(id);
+
+    if (!deleted) {
+      const error = new Error('KB source not found.');
+      error.statusCode = 404;
+      throw error;
+    }
+
+    return deleted;
   }
 
   async search(query, options = {}) {
@@ -265,6 +222,125 @@ export class KbService {
       clearTimeout(timeout);
     }
   }
+
+  async #prepareUrlImport(urls, { expandLinks = true, productType = null } = {}) {
+    const requestedUrls = sanitizeUrls(urls);
+
+    if (!requestedUrls.length) {
+      throw validationError('Provide at least one KB URL to import.');
+    }
+
+    const importUrls = [];
+    const failures = [];
+
+    for (const sourceUrl of requestedUrls) {
+      try {
+        const page = await this.#fetchText(sourceUrl);
+        const links = expandLinks ? extractDocumentLinks(page.content, page.url) : [];
+
+        if (shouldExpandLinks(page.url, links, expandLinks)) {
+          importUrls.push(...links);
+        } else {
+          importUrls.push(page.url);
+        }
+      } catch (error) {
+        failures.push({ url: sourceUrl, message: error.message });
+      }
+    }
+
+    const allUniqueUrls = [...new Set(importUrls)];
+    const uniqueUrls = allUniqueUrls.slice(0, this.importLimit);
+    const documents = [];
+
+    for (const url of uniqueUrls) {
+      try {
+        const page = await this.#fetchText(url);
+        const document = normalizeKbDocument({
+          content: page.content,
+          sourceUri: page.url,
+          contentType: page.contentType,
+          productType,
+        });
+
+        documents.push({
+          document,
+          preview: buildDocumentPreview(document, { remote: true }),
+        });
+      } catch (error) {
+        failures.push({ url, message: error.message });
+      }
+    }
+
+    return {
+      requestedUrls,
+      requestedFiles: 0,
+      discoveredUrls: uniqueUrls,
+      truncated: allUniqueUrls.length > uniqueUrls.length,
+      failures,
+      documents,
+    };
+  }
+
+  async #prepareFileImport(files, { productType = null } = {}) {
+    const fileList = Array.isArray(files) ? files : [files].filter(Boolean);
+
+    if (!fileList.length) {
+      throw validationError('Select at least one Markdown file to import.');
+    }
+
+    const documents = [];
+    const failures = [];
+
+    for (const file of fileList) {
+      const name = String(file?.name ?? 'knowledge-base.md');
+
+      try {
+        if (!isMarkdownFilename(name)) {
+          throw new Error('Only .md and .markdown files are supported.');
+        }
+
+        if (Number.isFinite(file.size) && file.size > this.maxTextBytes) {
+          throw new Error(`KB file is larger than ${this.maxTextBytes} bytes.`);
+        }
+
+        const content = await file.text();
+        const byteLength = Buffer.byteLength(content, 'utf8');
+
+        if (byteLength > this.maxTextBytes) {
+          throw new Error(`KB file is larger than ${this.maxTextBytes} bytes.`);
+        }
+
+        const document = normalizeKbDocument({
+          content,
+          sourceUri: `uploaded://${encodeURIComponent(name)}`,
+          contentType: file.type || 'text/markdown',
+          productType,
+        });
+
+        documents.push({
+          document,
+          preview: {
+            ...buildDocumentPreview(document),
+            filename: name,
+          },
+        });
+      } catch (error) {
+        failures.push({
+          filename: name,
+          message: error.message,
+        });
+      }
+    }
+
+    return {
+      requestedUrls: [],
+      requestedFiles: fileList.length,
+      discoveredUrls: [],
+      truncated: false,
+      failures,
+      documents,
+    };
+  }
 }
 
 function sanitizeUrls(urls) {
@@ -310,6 +386,81 @@ function validateRemoteDocument(document) {
   }
 
   return '';
+}
+
+function buildPreviewSummary(prepared) {
+  const documents = prepared.documents.map((entry) => entry.preview);
+
+  return {
+    requestedUrls: prepared.requestedUrls,
+    requestedFiles: prepared.requestedFiles,
+    discoveredUrls: prepared.discoveredUrls,
+    discoveredUrlCount: prepared.discoveredUrls.length,
+    truncated: prepared.truncated,
+    documents,
+    failures: prepared.failures,
+    readyCount: documents.filter((document) => document.status === 'ready').length,
+    warningCount: documents.filter((document) => document.status === 'warning').length,
+    blockedCount: documents.filter((document) => document.status === 'blocked').length,
+    importableCount: documents.filter((document) => document.importable).length,
+  };
+}
+
+function buildDocumentPreview(document, { remote = false } = {}) {
+  const blockingMessages = [];
+  const warningMessages = [];
+  const body = document.body.trim();
+  const chunks = chunkKbDocument(document);
+
+  if (remote) {
+    const remoteValidationMessage = validateRemoteDocument(document);
+
+    if (remoteValidationMessage) {
+      blockingMessages.push(remoteValidationMessage);
+    }
+  }
+
+  if (!body) {
+    blockingMessages.push('Document does not contain readable text.');
+  } else if (!chunks.length) {
+    blockingMessages.push('Document is too short to create a searchable KB chunk.');
+  }
+
+  if (!blockingMessages.length && body.length < 500) {
+    warningMessages.push('Readable content is short; confirm this is the article body before importing.');
+  }
+
+  if (!blockingMessages.length && /^untitled kb article$/i.test(document.title)) {
+    warningMessages.push('Document title could not be detected.');
+  }
+
+  const importable = !blockingMessages.length;
+  const status = importable ? (warningMessages.length ? 'warning' : 'ready') : 'blocked';
+  const qualityMessages = blockingMessages.length
+    ? blockingMessages
+    : warningMessages.length
+      ? warningMessages
+      : ['Ready to import.'];
+
+  return {
+    id: document.id,
+    title: document.title,
+    sourceUri: document.sourceUri,
+    productType: document.productType,
+    contentType: document.contentType,
+    charCount: body.length,
+    chunkCount: chunks.length,
+    status,
+    importable,
+    qualityMessages,
+    excerpt: createPreviewExcerpt(body),
+  };
+}
+
+function createPreviewExcerpt(body) {
+  const normalized = body.replace(/\s+/g, ' ').trim();
+  const excerpt = normalized.slice(0, 280);
+  return `${excerpt}${normalized.length > excerpt.length ? '...' : ''}`;
 }
 
 function isDynamicShellDocument(document) {

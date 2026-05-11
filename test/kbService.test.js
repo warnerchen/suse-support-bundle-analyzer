@@ -102,6 +102,48 @@ test('imports KB URLs and searches the local vector index', async () => {
   }
 });
 
+test('previews KB URLs without mutating the local vector index', async () => {
+  const storageDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kb-preview-store-'));
+  const sourceUrl = 'https://longhorn.io/kb/volume-recovery/';
+
+  try {
+    const service = new KbService({
+      store: new KbStore({
+        storageDir,
+        embeddingProvider: new LocalEmbeddingProvider({ dimensions: 64 }),
+      }),
+      fetchImpl: fixtureFetch({
+        [sourceUrl]: longhornArticleHtml({
+          title: 'Manual Recovery of a Longhorn Volume',
+          body: [
+            '<h2>Symptoms</h2>',
+            '<p>A Longhorn volume can become degraded after a node outage or replica rebuild interruption.</p>',
+            '<h2>Recovery</h2>',
+            '<p>Collect manager logs, inspect replica status, confirm engine image health, and verify node disk availability.</p>',
+            '<p>After the failed replica is identified, create a replacement replica and wait for rebuilding to complete.</p>',
+            '<p>Confirm workload attachment, data path readiness, and recurring backup status before closing the incident.</p>',
+          ].join('\n'),
+        }),
+      }),
+    });
+
+    await service.ensureReady();
+    const preview = await service.previewFromUrls([sourceUrl], {
+      expandLinks: false,
+      productType: 'longhorn',
+    });
+    const stats = await service.getStatus();
+
+    assert.equal(preview.importableCount, 1);
+    assert.equal(preview.documents[0].sourceUri, sourceUrl);
+    assert.equal(preview.documents[0].chunkCount, 1);
+    assert.equal(stats.documentCount, 0);
+    assert.equal(stats.chunkCount, 0);
+  } finally {
+    await fs.rm(storageDir, { recursive: true, force: true });
+  }
+});
+
 test('imports Markdown files into the local vector index', async () => {
   const storageDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kb-md-store-'));
 
@@ -177,17 +219,68 @@ test('skips remote pages without readable KB article content', async () => {
     });
 
     await service.ensureReady();
+    const preview = await service.previewFromUrls([sourceUrl], {
+      expandLinks: false,
+      productType: 'harvester',
+    });
     const result = await service.importFromUrls([sourceUrl], {
       expandLinks: false,
       productType: 'harvester',
     });
     const stats = await service.getStatus();
 
+    assert.equal(preview.importableCount, 0);
+    assert.equal(preview.blockedCount, 1);
+    assert.equal(preview.documents[0].status, 'blocked');
     assert.equal(result.documentsImported, 0);
     assert.equal(result.chunksIndexed, 0);
     assert.equal(result.failures.length, 1);
     assert.match(result.failures[0].message, /readable KB article content/);
     assert.equal(stats.documentCount, 0);
+  } finally {
+    await fs.rm(storageDir, { recursive: true, force: true });
+  }
+});
+
+test('deletes a KB source and its indexed chunks', async () => {
+  const storageDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kb-delete-store-'));
+
+  try {
+    const service = new KbService({
+      store: new KbStore({
+        storageDir,
+        embeddingProvider: new LocalEmbeddingProvider({ dimensions: 64 }),
+      }),
+    });
+    await service.ensureReady();
+
+    await service.importFromFiles(
+      [
+        markdownFile(
+          'longhorn-replica.md',
+          [
+            '# Longhorn Replica Recovery',
+            '',
+            'Replica recovery requires checking the engine, manager logs, and disk scheduling status.',
+            'After replacing a failed replica, monitor rebuilding progress and validate the workload mount.',
+          ].join('\n'),
+        ),
+      ],
+      { productType: 'longhorn' },
+    );
+
+    const before = await service.getStatus();
+    assert.equal(before.documentCount, 1);
+    assert.equal(before.chunkCount, 1);
+    assert.equal(before.sources.length, 1);
+
+    const deleted = await service.deleteSource(before.sources[0].id);
+    const after = await service.getStatus();
+
+    assert.equal(deleted.removedChunks, 1);
+    assert.equal(after.documentCount, 0);
+    assert.equal(after.chunkCount, 0);
+    assert.deepEqual(after.sources, []);
   } finally {
     await fs.rm(storageDir, { recursive: true, force: true });
   }

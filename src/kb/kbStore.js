@@ -26,14 +26,18 @@ export class KbStore {
       chunkCount: state.chunks.length,
       updatedAt: state.updatedAt,
       embedding: state.embedding,
-      sources: state.documents.map((document) => ({
-        id: document.id,
-        title: document.title,
-        sourceUri: document.sourceUri,
-        productType: document.productType,
-        importedAt: document.importedAt,
-      })),
+      sources: sortSources(state.documents.map(toSourceSummary)),
     };
+  }
+
+  async listSources({ productType = null } = {}) {
+    const state = await this.#loadState();
+    const normalizedProductType = String(productType ?? '').trim().toLowerCase();
+    const sources = normalizedProductType
+      ? state.documents.filter((document) => document.productType === normalizedProductType)
+      : state.documents;
+
+    return sortSources(sources.map(toSourceSummary));
   }
 
   async upsertDocuments(documents) {
@@ -152,6 +156,30 @@ export class KbStore {
     return [...bestByDocument.values()].sort((a, b) => b.score - a.score).slice(0, limit);
   }
 
+  async deleteDocument(id) {
+    const state = await this.#loadState();
+    const documentId = String(id ?? '').trim();
+    const document = state.documents.find((candidate) => candidate.id === documentId);
+
+    if (!document) {
+      return null;
+    }
+
+    const chunksBefore = state.chunks.length;
+    state.documents = state.documents.filter((candidate) => candidate.id !== documentId);
+    state.chunks = state.chunks.filter((chunk) => chunk.documentId !== documentId);
+    state.updatedAt = new Date().toISOString();
+    await this.#saveState(state);
+
+    return {
+      ...toSourceSummary(document),
+      removedChunks: chunksBefore - state.chunks.length,
+      totalDocuments: state.documents.length,
+      totalChunks: state.chunks.length,
+      updatedAt: state.updatedAt,
+    };
+  }
+
   async #loadState() {
     if (this.state) {
       return this.state;
@@ -192,6 +220,23 @@ function emptyState(embedding) {
     documents: [],
     chunks: [],
   };
+}
+
+function toSourceSummary(document) {
+  return {
+    id: document.id,
+    title: document.title,
+    sourceUri: document.sourceUri,
+    productType: document.productType,
+    contentType: document.contentType,
+    importedAt: document.importedAt,
+    charCount: document.charCount,
+    chunkCount: document.chunkCount,
+  };
+}
+
+function sortSources(sources) {
+  return [...sources].sort((a, b) => String(b.importedAt ?? '').localeCompare(String(a.importedAt ?? '')));
 }
 
 function keywordOverlapScore(queryTokens, text) {

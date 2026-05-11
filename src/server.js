@@ -86,6 +86,15 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (url.pathname === '/api/kb/sources' && request.method === 'GET') {
+      sendJson(response, 200, {
+        sources: await kbService.listSources({
+          productType: url.searchParams.get('productType'),
+        }),
+      });
+      return;
+    }
+
     if (url.pathname === '/api/kb/search' && request.method === 'GET') {
       const q = url.searchParams.get('q') ?? '';
       const productType = url.searchParams.get('productType');
@@ -96,6 +105,39 @@ const server = http.createServer(async (request, response) => {
       });
 
       sendJson(response, 200, { results });
+      return;
+    }
+
+    if (url.pathname === '/api/kb/preview-url' && request.method === 'POST') {
+      const contentType = request.headers['content-type'] ?? '';
+
+      if (!contentType.includes('application/json')) {
+        sendError(response, 415, 'KB preview must use application/json.');
+        return;
+      }
+
+      const body = await readJsonBody(request);
+      const preview = await kbService.previewFromUrls(body.urls ?? body.url, {
+        expandLinks: body.expandLinks !== false,
+        productType: body.productType,
+      });
+      sendJson(response, 200, { preview, kb: await kbService.getStatus() });
+      return;
+    }
+
+    if (url.pathname === '/api/kb/preview-files' && request.method === 'POST') {
+      const contentType = request.headers['content-type'] ?? '';
+
+      if (!contentType.includes('multipart/form-data')) {
+        sendError(response, 415, 'KB file preview must use multipart/form-data.');
+        return;
+      }
+
+      const formData = await parseMultipartForm(request);
+      const preview = await kbService.previewFromFiles(formData.getAll('kbFiles'), {
+        productType: formData.get('productType'),
+      });
+      sendJson(response, 200, { preview, kb: await kbService.getStatus() });
       return;
     }
 
@@ -129,6 +171,13 @@ const server = http.createServer(async (request, response) => {
         productType: formData.get('productType'),
       });
       sendJson(response, 201, { import: result, kb: await kbService.getStatus() });
+      return;
+    }
+
+    if (url.pathname.startsWith('/api/kb/sources/') && request.method === 'DELETE') {
+      const id = decodeURIComponent(url.pathname.split('/').at(-1) ?? '');
+      const deleted = await kbService.deleteSource(id);
+      sendJson(response, 200, { deleted, kb: await kbService.getStatus() });
       return;
     }
 

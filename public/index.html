@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SUSE Support Bundle Analyzer</title>
-    <link rel="stylesheet" href="/styles.css?v=20260508-11" />
+    <link rel="stylesheet" href="/styles.css?v=20260511-1" />
   </head>
   <body>
     <div class="app-shell">
@@ -156,7 +156,7 @@
                 <label class="kb-field-label" for="kbUrlInput">Source URLs</label>
                 <div class="kb-import-control">
                   <textarea id="kbUrlInput" rows="2" placeholder="https://longhorn.io/kb/"></textarea>
-                  <button class="primary-button kb-import-button" id="kbImportButton" type="submit">Import URLs</button>
+                  <button class="primary-button kb-import-button" id="kbImportButton" type="submit">Preview URLs</button>
                 </div>
               </form>
 
@@ -166,16 +166,29 @@
                   <input id="kbFileInput" class="kb-file-input" type="file" accept=".md,.markdown,text/markdown" multiple />
                   <label class="kb-file-picker" for="kbFileInput">Choose files</label>
                   <span id="kbFileName" class="kb-file-name">No files selected</span>
-                  <button class="primary-button kb-file-import-button" id="kbFileImportButton" type="submit">Import Files</button>
+                  <button class="primary-button kb-file-import-button" id="kbFileImportButton" type="submit">Preview Files</button>
                 </div>
               </form>
 
               <p class="form-message" id="kbMessage"></p>
+              <div class="kb-preview-panel" id="kbPreviewPanel" hidden></div>
             </div>
             <div class="kb-status-panel">
               <div class="kb-field-label">Index Status</div>
               <div class="kb-stats" id="kbStats">
                 <p class="empty-report">Loading KB status</p>
+              </div>
+              <div class="kb-sources-header">
+                <div class="kb-field-label">Sources</div>
+                <select id="kbSourceFilter" aria-label="Filter KB sources by product">
+                  <option value="">All products</option>
+                  <option value="longhorn">Longhorn</option>
+                  <option value="harvester">Harvester</option>
+                  <option value="unknown">Unknown</option>
+                </select>
+              </div>
+              <div class="kb-source-list" id="kbSourceList">
+                <p class="empty-report">Loading KB sources</p>
               </div>
             </div>
           </div>
@@ -218,6 +231,6 @@
       </section>
     </div>
 
-    <script src="/app.js?v=20260508-4" type="module"></script>
+    <script src="/app.js?v=20260511-1" type="module"></script>
   </body>
 </html>

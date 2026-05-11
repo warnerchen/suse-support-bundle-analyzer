@@ -28,11 +28,16 @@ const kbExpandLinks = document.querySelector('#kbExpandLinks');
 const kbProductType = document.querySelector('#kbProductType');
 const kbMessage = document.querySelector('#kbMessage');
 const kbStats = document.querySelector('#kbStats');
+const kbPreviewPanel = document.querySelector('#kbPreviewPanel');
+const kbSourceFilter = document.querySelector('#kbSourceFilter');
+const kbSourceList = document.querySelector('#kbSourceList');
 
 let maxUploadBytes = 0;
 let pollTimer = null;
 let pendingDelete = null;
 let previousFocus = null;
+let pendingKbImport = null;
+let kbSources = [];
 
 await initialize();
 
@@ -96,9 +101,35 @@ function bindEvents() {
 
   refreshButton.addEventListener('click', refreshDashboard);
   form.addEventListener('submit', uploadBundle);
-  kbUrlImportForm.addEventListener('submit', importKbUrls);
-  kbFileImportForm.addEventListener('submit', importKbFiles);
+  kbUrlImportForm.addEventListener('submit', previewKbUrls);
+  kbFileImportForm.addEventListener('submit', previewKbFiles);
+  kbUrlInput.addEventListener('input', clearKbPreview);
   kbFileInput.addEventListener('change', updateSelectedKbFiles);
+  kbProductType.addEventListener('change', clearKbPreview);
+  kbExpandLinks.addEventListener('change', clearKbPreview);
+  kbSourceFilter.addEventListener('change', () => renderKbSources(kbSources));
+  kbPreviewPanel.addEventListener('click', (event) => {
+    const confirmButton = event.target.closest('[data-confirm-kb-import]');
+
+    if (confirmButton) {
+      confirmKbImport();
+      return;
+    }
+
+    const cancelButton = event.target.closest('[data-cancel-kb-preview]');
+
+    if (cancelButton) {
+      clearKbPreview();
+      setKbMessage('');
+    }
+  });
+  kbSourceList.addEventListener('click', (event) => {
+    const deleteButton = event.target.closest('[data-delete-kb-source-id]');
+
+    if (deleteButton) {
+      deleteKbSource(deleteButton.dataset.deleteKbSourceId, deleteButton.dataset.title, deleteButton);
+    }
+  });
   bundleRows.addEventListener('click', (event) => {
     const reportButton = event.target.closest('[data-report-job-id]');
 
@@ -149,6 +180,7 @@ function updateSelectedFile({ clearFeedback = true } = {}) {
 
 function updateSelectedKbFiles() {
   const files = [...(kbFileInput.files ?? [])];
+  clearKbPreview();
 
   if (!files.length) {
     kbFileName.textContent = 'No files selected';
@@ -220,10 +252,11 @@ async function loadKbStatus() {
   } catch (error) {
     setKbMessage(error.message, 'error');
     kbStats.innerHTML = '<p class="empty-report">KB status unavailable</p>';
+    kbSourceList.innerHTML = '<p class="empty-report">KB sources unavailable</p>';
   }
 }
 
-async function importKbUrls(event) {
+async function previewKbUrls(event) {
   event.preventDefault();
 
   const urls = kbUrlInput.value
@@ -237,27 +270,33 @@ async function importKbUrls(event) {
   }
 
   kbImportButton.disabled = true;
-  setKbMessage('Importing KB');
+  clearKbPreview();
+  setKbMessage('Previewing KB URLs');
 
   try {
-    const response = await fetch('/api/kb/import-url', {
+    const importRequest = {
+      type: 'urls',
+      urls,
+      expandLinks: kbExpandLinks.checked,
+      productType: kbProductType.value || null,
+    };
+    const response = await fetch('/api/kb/preview-url', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        urls,
-        expandLinks: kbExpandLinks.checked,
-        productType: kbProductType.value || null,
-      }),
+      body: JSON.stringify(importRequest),
     });
     const payload = await response.json();
 
     if (!response.ok) {
-      throw new Error(payload.error?.message ?? 'KB import failed.');
+      throw new Error(payload.error?.message ?? 'KB preview failed.');
     }
 
-    await handleKbImportSuccess(payload);
+    pendingKbImport = payload.preview?.importableCount ? importRequest : null;
+    renderKbPreview(payload.preview);
+    renderKbStatus(payload.kb);
+    setKbPreviewMessage(payload.preview);
   } catch (error) {
     setKbMessage(error.message, 'error');
   } finally {
@@ -265,7 +304,7 @@ async function importKbUrls(event) {
   }
 }
 
-async function importKbFiles(event) {
+async function previewKbFiles(event) {
   event.preventDefault();
 
   const files = [...(kbFileInput.files ?? [])];
@@ -283,7 +322,8 @@ async function importKbFiles(event) {
   }
 
   kbFileImportButton.disabled = true;
-  setKbMessage('Importing Markdown files');
+  clearKbPreview();
+  setKbMessage('Previewing Markdown files');
 
   const formData = new FormData();
   formData.append('productType', kbProductType.value || '');
@@ -293,24 +333,102 @@ async function importKbFiles(event) {
   }
 
   try {
-    const response = await fetch('/api/kb/import-files', {
+    const response = await fetch('/api/kb/preview-files', {
       method: 'POST',
       body: formData,
     });
     const payload = await response.json();
 
     if (!response.ok) {
-      throw new Error(payload.error?.message ?? 'KB file import failed.');
+      throw new Error(payload.error?.message ?? 'KB file preview failed.');
     }
 
-    kbFileImportForm.reset();
-    updateSelectedKbFiles();
-    await handleKbImportSuccess(payload);
+    pendingKbImport = payload.preview?.importableCount
+      ? {
+          type: 'files',
+          files,
+          productType: kbProductType.value || null,
+        }
+      : null;
+    renderKbPreview(payload.preview);
+    renderKbStatus(payload.kb);
+    setKbPreviewMessage(payload.preview);
   } catch (error) {
     setKbMessage(error.message, 'error');
   } finally {
     kbFileImportButton.disabled = false;
   }
+}
+
+async function confirmKbImport() {
+  if (!pendingKbImport) {
+    setKbMessage('Preview the KB source before importing.', 'error');
+    return;
+  }
+
+  const confirmButton = kbPreviewPanel.querySelector('[data-confirm-kb-import]');
+  const cancelButton = kbPreviewPanel.querySelector('[data-cancel-kb-preview]');
+  confirmButton.disabled = true;
+  cancelButton.disabled = true;
+  setKbMessage('Importing previewed KB sources');
+
+  try {
+    const payload = pendingKbImport.type === 'urls' ? await importPreviewedUrls(pendingKbImport) : await importPreviewedFiles(pendingKbImport);
+
+    if (pendingKbImport.type === 'files') {
+      kbFileImportForm.reset();
+      updateSelectedKbFiles();
+    }
+
+    clearKbPreview();
+    await handleKbImportSuccess(payload);
+  } catch (error) {
+    setKbMessage(error.message, 'error');
+    confirmButton.disabled = false;
+    cancelButton.disabled = false;
+  }
+}
+
+async function importPreviewedUrls(importRequest) {
+  const response = await fetch('/api/kb/import-url', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      urls: importRequest.urls,
+      expandLinks: importRequest.expandLinks,
+      productType: importRequest.productType,
+    }),
+  });
+  const payload = await response.json();
+
+  if (!response.ok) {
+    throw new Error(payload.error?.message ?? 'KB import failed.');
+  }
+
+  return payload;
+}
+
+async function importPreviewedFiles(importRequest) {
+  const formData = new FormData();
+  formData.append('productType', importRequest.productType || '');
+
+  for (const file of importRequest.files) {
+    formData.append('kbFiles', file);
+  }
+
+  const response = await fetch('/api/kb/import-files', {
+    method: 'POST',
+    body: formData,
+  });
+  const payload = await response.json();
+
+  if (!response.ok) {
+    throw new Error(payload.error?.message ?? 'KB file import failed.');
+  }
+
+  return payload;
 }
 
 async function handleKbImportSuccess(payload) {
@@ -336,6 +454,106 @@ async function handleKbImportSuccess(payload) {
   if (reportContent.dataset.jobId) {
     await loadReport(reportContent.dataset.jobId);
   }
+}
+
+function setKbPreviewMessage(preview = {}) {
+  const importable = preview.importableCount ?? 0;
+  const blocked = preview.blockedCount ?? 0;
+  const warnings = preview.warningCount ?? 0;
+  const failures = preview.failures?.length ?? 0;
+
+  if (!importable) {
+    setKbMessage('Preview finished, but no importable KB documents were found.', 'error');
+    return;
+  }
+
+  setKbMessage(
+    `Preview ready: ${importable} importable document${importable === 1 ? '' : 's'}${
+      warnings ? `, ${warnings} with warnings` : ''
+    }${blocked || failures ? `, ${blocked + failures} blocked or failed` : ''}.`,
+    blocked || failures || warnings ? 'warning' : 'success',
+  );
+}
+
+function renderKbPreview(preview = {}) {
+  const documents = preview.documents ?? [];
+  const failures = preview.failures ?? [];
+  const importableCount = preview.importableCount ?? 0;
+
+  kbPreviewPanel.hidden = false;
+  kbPreviewPanel.innerHTML = `
+    <div class="kb-preview-header">
+      <div>
+        <div class="kb-field-label">Import Preview</div>
+        <p>${escapeHtml(renderKbPreviewSummary(preview))}</p>
+      </div>
+      <div class="kb-preview-actions">
+        <button class="secondary-button" type="button" data-cancel-kb-preview>Cancel</button>
+        <button class="primary-button" type="button" data-confirm-kb-import ${importableCount ? '' : 'disabled'}>
+          Import ${importableCount || ''}
+        </button>
+      </div>
+    </div>
+    ${
+      documents.length
+        ? `<div class="kb-preview-list">${documents.map(renderKbPreviewDocument).join('')}</div>`
+        : '<p class="empty-report">No documents could be previewed.</p>'
+    }
+    ${failures.length ? `<div class="kb-preview-failures">${failures.map(renderKbPreviewFailure).join('')}</div>` : ''}
+  `;
+}
+
+function renderKbPreviewSummary(preview = {}) {
+  const discovered = preview.discoveredUrlCount ?? 0;
+  const files = preview.requestedFiles ?? 0;
+  const importable = preview.importableCount ?? 0;
+  const blocked = preview.blockedCount ?? 0;
+  const failures = preview.failures?.length ?? 0;
+
+  if (files) {
+    return `${files} files checked, ${importable} importable, ${blocked + failures} blocked or failed.`;
+  }
+
+  return `${discovered} URLs checked, ${importable} importable, ${blocked + failures} blocked or failed.`;
+}
+
+function renderKbPreviewDocument(document) {
+  const sourceLabel = document.filename || document.sourceUri;
+
+  return `
+    <article class="kb-preview-item kb-preview-${escapeHtml(document.status)}">
+      <div class="kb-preview-item-header">
+        <span class="kb-quality-badge">${escapeHtml(document.status)}</span>
+        <span>${escapeHtml(productLabel(document.productType))}</span>
+      </div>
+      <h3>${escapeHtml(document.title)}</h3>
+      <p class="kb-preview-source" title="${escapeHtml(sourceLabel)}">${escapeHtml(sourceLabel)}</p>
+      <div class="kb-preview-meta">
+        <span>${formatInteger(document.charCount)} chars</span>
+        <span>${document.chunkCount} chunk${document.chunkCount === 1 ? '' : 's'}</span>
+      </div>
+      <p>${escapeHtml(document.excerpt || 'No readable excerpt detected.')}</p>
+      <ul>
+        ${(document.qualityMessages ?? []).map((message) => `<li>${escapeHtml(message)}</li>`).join('')}
+      </ul>
+    </article>
+  `;
+}
+
+function renderKbPreviewFailure(failure) {
+  const target = failure.url ?? failure.filename ?? 'Unknown source';
+  return `
+    <div class="kb-preview-failure">
+      <strong>${escapeHtml(target)}</strong>
+      <span>${escapeHtml(failure.message)}</span>
+    </div>
+  `;
+}
+
+function clearKbPreview() {
+  pendingKbImport = null;
+  kbPreviewPanel.hidden = true;
+  kbPreviewPanel.innerHTML = '';
 }
 
 function sendWithProgress(url, body, onProgress) {
@@ -450,6 +668,8 @@ function renderBundles(bundles, analysisJobsByBundleId) {
 function renderKbStatus(kb = {}) {
   const documentCount = kb.documentCount ?? 0;
   const chunkCount = kb.chunkCount ?? 0;
+  kbSources = kb.sources ?? [];
+  renderKbSources(kbSources);
 
   if (!documentCount) {
     kbStats.innerHTML = `
@@ -477,6 +697,87 @@ function renderKbStatus(kb = {}) {
     </div>
     <div class="kb-updated">Updated ${escapeHtml(formatDate(kb.updatedAt))}</div>
   `;
+}
+
+function renderKbSources(sources = []) {
+  const productFilter = kbSourceFilter.value;
+  const filteredSources = productFilter ? sources.filter((source) => source.productType === productFilter) : sources;
+
+  if (!filteredSources.length) {
+    kbSourceList.innerHTML = `<p class="empty-report">${
+      sources.length ? 'No KB sources match this filter' : 'No KB sources imported yet'
+    }</p>`;
+    return;
+  }
+
+  kbSourceList.innerHTML = filteredSources.map(renderKbSource).join('');
+}
+
+function renderKbSource(source) {
+  const sourceLabel = source.sourceUri || source.title;
+
+  return `
+    <article class="kb-source-item">
+      <div class="kb-source-copy">
+        <div class="kb-source-title">${escapeHtml(source.title)}</div>
+        <div class="kb-source-uri" title="${escapeHtml(sourceLabel)}">${escapeHtml(sourceLabel)}</div>
+        <div class="kb-source-meta">
+          <span>${escapeHtml(productLabel(source.productType))}</span>
+          <span>${source.chunkCount ?? 0} chunk${source.chunkCount === 1 ? '' : 's'}</span>
+          <span>${formatInteger(source.charCount)} chars</span>
+        </div>
+      </div>
+      <button
+        class="delete-button kb-source-delete"
+        type="button"
+        data-delete-kb-source-id="${escapeHtml(source.id)}"
+        data-title="${escapeHtml(source.title)}"
+      >
+        Delete
+      </button>
+    </article>
+  `;
+}
+
+async function deleteKbSource(sourceId, title, button) {
+  if (button.dataset.confirm !== 'true') {
+    button.dataset.confirm = 'true';
+    button.textContent = 'Confirm';
+    setKbMessage(`Confirm deletion for ${title}.`, 'warning');
+    setTimeout(() => {
+      if (button.dataset.confirm === 'true') {
+        button.dataset.confirm = 'false';
+        button.textContent = 'Delete';
+      }
+    }, 3500);
+    return;
+  }
+
+  button.disabled = true;
+  setKbMessage(`Deleting ${title}`);
+
+  try {
+    const response = await fetch(`/api/kb/sources/${encodeURIComponent(sourceId)}`, {
+      method: 'DELETE',
+    });
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error?.message ?? 'KB source delete failed.');
+    }
+
+    renderKbStatus(payload.kb);
+    setKbMessage(`Deleted ${title}`, 'success');
+
+    if (reportContent.dataset.jobId) {
+      await loadReport(reportContent.dataset.jobId);
+    }
+  } catch (error) {
+    setKbMessage(error.message, 'error');
+    button.disabled = false;
+    button.dataset.confirm = 'false';
+    button.textContent = 'Delete';
+  }
 }
 
 function renderAnalysisStatus(job) {
@@ -964,7 +1265,15 @@ function renderFileIndex(files) {
 }
 
 function productLabel(productType) {
-  return productType === 'harvester' ? 'Harvester' : 'Longhorn';
+  if (productType === 'longhorn') {
+    return 'Longhorn';
+  }
+
+  if (productType === 'harvester') {
+    return 'Harvester';
+  }
+
+  return 'Unknown';
 }
 
 function setApiStatus(message, state) {
@@ -1008,6 +1317,10 @@ function formatBytes(bytes) {
   const value = bytes / 1024 ** index;
 
   return `${value >= 10 || index === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[index]}`;
+}
+
+function formatInteger(value) {
+  return Number.isFinite(value) ? new Intl.NumberFormat().format(value) : '0';
 }
 
 function formatDate(value) {
