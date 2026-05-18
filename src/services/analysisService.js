@@ -43,13 +43,41 @@ export class AnalysisService {
   }
 
   async getReport(jobId) {
-    const report = await this.reportRepository.findByJobId(jobId);
+    let report = await this.reportRepository.findByJobId(jobId);
 
     if (!report) {
       return null;
     }
 
+    if (typeof this.analyzer.enrichExistingReport === 'function') {
+      report = await this.analyzer.enrichExistingReport(report);
+    }
+
     return this.#enrichReport(report);
+  }
+
+  async getExtractedFile(jobId, { reportPath, lineStart = null, lineEnd = null, matchText = '' } = {}) {
+    const job = await this.jobRepository.findById(jobId);
+
+    if (!job) {
+      const error = new Error('Analysis job not found.');
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (!reportPath) {
+      const error = new Error('Provide a file path to preview.');
+      error.statusCode = 400;
+      throw error;
+    }
+
+    return this.analyzer.readExtractedFile({
+      jobId,
+      reportPath,
+      lineStart,
+      lineEnd,
+      matchText,
+    });
   }
 
   async hasRunningJobForBundle(bundleId) {

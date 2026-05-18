@@ -10,6 +10,7 @@ Current scope:
 - Create an analysis job automatically after upload
 - Safely extract common archive formats and generate a file index report
 - Run Longhorn inventory checks, finding correlation, and grouped diagnostics
+- Preview raw evidence files from findings and the file index
 - Import product KB URLs or Markdown files from the UI and store a local vector index
 - Show related KB articles on correlated Longhorn findings
 - Persist bundle metadata as JSON
@@ -135,6 +136,15 @@ Returns one analysis job.
 ### `GET /api/analysis-jobs/{id}/report`
 
 Returns the generated safe-extraction file index report for a completed analysis job. If KB data has been imported, Longhorn finding groups include related KB matches.
+
+### `GET /api/analysis-jobs/{id}/files?path={reportPath}`
+
+Returns a safe preview of one extracted support bundle file for an analysis job. Optional query parameters:
+
+- `lineStart`: line number to center in the preview
+- `lineEnd`: final line number to highlight
+
+The preview is limited to regular text files inside the job extraction directory. Absolute paths, parent directory traversal, symlinks, binary files, and missing files are rejected or marked unavailable.
 
 ### `GET /api/kb/status`
 

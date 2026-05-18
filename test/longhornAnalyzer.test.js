@@ -26,6 +26,23 @@ test('builds Longhorn findings from support bundle files', async () => {
     );
     await writeFixtureFile(
       extractDir,
+      'bundle/yamls/namespaced/longhorn-system/v1/configmaps.yaml',
+      [
+        'apiVersion: v1',
+        'items:',
+        '- apiVersion: v1',
+        '  kind: ConfigMap',
+        '  metadata:',
+        '    labels:',
+        '      app.kubernetes.io/name: longhorn',
+        '      app.kubernetes.io/version: v1.8.1',
+        '      helm.sh/chart: longhorn-1.8.1',
+        '    name: longhorn-default-setting',
+        '    namespace: longhorn-system',
+      ].join('\n'),
+    );
+    await writeFixtureFile(
+      extractDir,
       'bundle/prometheus-alerts.json',
       JSON.stringify([
         {
@@ -101,6 +118,8 @@ test('builds Longhorn findings from support bundle files', async () => {
     });
 
     assert.equal(result.inventory.metadata.kubernetesversion, 'v1.32.11+rke2r1');
+    assert.equal(result.inventory.longhorn.version.version, 'v1.8.1');
+    assert.equal(result.inventory.longhorn.version.components[0].component, 'longhorn');
     assert.equal(result.inventory.longhorn.volumes.total, 1);
     assert.equal(result.inventory.longhorn.volumes.unhealthy, 1);
     assert.equal(result.inventory.longhorn.nodes.problematic, 1);
@@ -115,6 +134,9 @@ test('builds Longhorn findings from support bundle files', async () => {
     assert.ok(result.findings.some((finding) => finding.title.includes('Volume volume-a is degraded')));
     assert.ok(result.findings.some((finding) => finding.title.includes('Node node-a')));
     assert.ok(result.findings.some((finding) => finding.id === 'longhorn-log-replica-scheduling-storage'));
+    const logFinding = result.findings.find((finding) => finding.id === 'longhorn-log-replica-scheduling-storage');
+    assert.equal(logFinding.evidenceRefs[0].lineStart, 1);
+    assert.equal(logFinding.evidenceRefs[0].path, 'bundle/logs/longhorn-system/longhorn-manager-a/longhorn-manager.log');
   } finally {
     await fs.rm(extractDir, { recursive: true, force: true });
   }
@@ -143,6 +165,39 @@ test('returns an empty finding set when Longhorn files are absent', async () => 
     });
     assert.deepEqual(result.findings, []);
     assert.deepEqual(result.findingGroups, []);
+  } finally {
+    await fs.rm(extractDir, { recursive: true, force: true });
+  }
+});
+
+test('keeps log evidence line references aligned for sampled large log files', async () => {
+  const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), 'longhorn-analyzer-large-log-'));
+  const targetLine = 12050;
+  const lines = Array.from({ length: 12500 }, (_, index) => {
+    const lineNumber = index + 1;
+
+    if (lineNumber === targetLine) {
+      return '2026-01-01T00:00:00Z level=error msg="Precheck failed for creating new replica: insufficient storage"';
+    }
+
+    return `2026-01-01T00:00:00Z level=info msg="${String(lineNumber).padStart(5, '0')} ${'background log '.repeat(8)}"`;
+  });
+
+  try {
+    await writeFixtureFile(
+      extractDir,
+      'bundle/logs/longhorn-system/longhorn-manager-a/longhorn-manager.log',
+      lines.join('\n'),
+    );
+
+    const result = await analyzeLonghornSupportBundle({
+      extractDir,
+      index: await buildIndex(extractDir),
+    });
+    const logFinding = result.findings.find((finding) => finding.id === 'longhorn-log-replica-scheduling-storage');
+
+    assert.equal(logFinding.evidenceRefs[0].lineStart, targetLine);
+    assert.match(logFinding.evidence[0], new RegExp(`:${targetLine} `));
   } finally {
     await fs.rm(extractDir, { recursive: true, force: true });
   }

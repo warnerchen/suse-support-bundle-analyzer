@@ -83,6 +83,7 @@ export async function analyzeLonghornSupportBundle({ extractDir, index }) {
   };
 
   inventory.metadata = await readSupportBundleMetadata(context);
+  inventory.longhorn.version = await detectLonghornVersion(context);
   const collectionFinding = await analyzeBundleGenerationErrors(context);
 
   if (collectionFinding) {
@@ -395,6 +396,220 @@ async function readSupportBundleMetadata(context) {
   }
 
   return metadata;
+}
+
+export async function detectLonghornVersion(context) {
+  const candidates = [];
+  const sources = [
+    {
+      suffix: `${LONGHORN_RESOURCE_ROOT}/longhorn.io/v1beta2/settings.yaml`,
+      collect: collectSettingsVersions,
+    },
+    {
+      suffix: `${LONGHORN_RESOURCE_ROOT}/v1/configmaps.yaml`,
+      collect: collectLonghornLabelVersions,
+    },
+    {
+      suffix: `${LONGHORN_RESOURCE_ROOT}/apps/v1/deployments.yaml`,
+      collect: collectLonghornWorkloadVersions,
+    },
+    {
+      suffix: `${LONGHORN_RESOURCE_ROOT}/longhorn.io/v1beta2/engineimages.yaml`,
+      collect: collectEngineImageVersions,
+    },
+    {
+      suffix: `${LONGHORN_RESOURCE_ROOT}/v1/pods.yaml`,
+      collect: collectLonghornImageVersions,
+    },
+  ];
+
+  for (const source of sources) {
+    const file = await readReportFile(context, source.suffix);
+
+    if (!file) {
+      continue;
+    }
+
+    candidates.push(
+      ...source.collect(file.content).map((candidate) => ({
+        ...candidate,
+        path: file.reportPath,
+      })),
+    );
+  }
+
+  const selected = candidates.sort((a, b) => a.priority - b.priority)[0];
+
+  if (!selected) {
+    return null;
+  }
+
+  return {
+    version: selected.version,
+    source: selected.source,
+    path: selected.path,
+    components: uniqueVersionCandidates(candidates),
+  };
+}
+
+function collectSettingsVersions(content) {
+  return splitKubernetesItems(content)
+    .filter((item) => readMetadataName(item) === 'current-longhorn-version')
+    .map((item) => createVersionCandidate({
+      version: readTopLevelScalar(item, 'value'),
+      component: 'longhorn',
+      source: 'Longhorn setting',
+      priority: 0,
+    }))
+    .filter(Boolean);
+}
+
+function collectLonghornLabelVersions(content) {
+  return splitKubernetesItems(content)
+    .filter((item) => extractYamlScalar(item, 'app.kubernetes.io/name') === 'longhorn')
+    .flatMap((item) => [
+      createVersionCandidate({
+        version: extractYamlScalar(item, 'app.kubernetes.io/version'),
+        component: 'longhorn',
+        source: 'Kubernetes app label',
+        priority: 1,
+      }),
+      createVersionCandidate({
+        version: extractChartVersion(extractYamlScalar(item, 'helm.sh/chart')),
+        component: 'longhorn-chart',
+        source: 'Helm chart label',
+        priority: 2,
+      }),
+    ])
+    .filter(Boolean);
+}
+
+function collectLonghornWorkloadVersions(content) {
+  return [
+    ...collectLonghornLabelVersions(content),
+    ...collectDriverVersions(content),
+    ...collectLonghornImageVersions(content),
+  ];
+}
+
+function collectDriverVersions(content) {
+  return splitKubernetesItems(content)
+    .map((item) => createVersionCandidate({
+      version: extractYamlScalar(item, 'driver.longhorn.io/version'),
+      component: 'longhorn-driver',
+      source: 'Longhorn driver annotation',
+      priority: 3,
+    }))
+    .filter(Boolean);
+}
+
+function collectEngineImageVersions(content) {
+  return [
+    ...splitKubernetesItems(content)
+      .map((item) => createVersionCandidate({
+        version: readScalar(topLevelSection(item, 'status'), 'version'),
+        component: 'longhorn-engine',
+        source: 'EngineImage status',
+        priority: 6,
+      }))
+      .filter(Boolean),
+    ...collectLonghornImageVersions(content),
+  ];
+}
+
+function collectLonghornImageVersions(content) {
+  const candidates = [];
+  const imageRegex =
+    /\b(?:image:\s*)?(?:(?:[\w.-]+(?::\d+)?\/)+)?(?:longhornio\/|mirrored-longhornio-)(longhorn-manager|longhorn-engine|longhorn-ui|longhorn-instance-manager|longhorn-share-manager|backing-image-manager):([A-Za-z0-9._+-]+)/g;
+  const priorityByComponent = {
+    'longhorn-manager': 4,
+    'longhorn-engine': 7,
+    'longhorn-ui': 8,
+    'longhorn-instance-manager': 9,
+    'longhorn-share-manager': 10,
+    'backing-image-manager': 11,
+  };
+
+  for (const match of content.matchAll(imageRegex)) {
+    candidates.push(
+      createVersionCandidate({
+        version: match[2],
+        component: match[1],
+        source: `${match[1]} image`,
+        priority: priorityByComponent[match[1]],
+      }),
+    );
+  }
+
+  return candidates.filter(Boolean);
+}
+
+function createVersionCandidate({ version, component, source, priority }) {
+  const normalizedVersion = normalizeLonghornVersion(version);
+
+  if (!normalizedVersion) {
+    return null;
+  }
+
+  return {
+    version: normalizedVersion,
+    component,
+    source,
+    priority,
+  };
+}
+
+function uniqueVersionCandidates(candidates) {
+  const seen = new Set();
+  const unique = [];
+
+  for (const candidate of candidates.sort((a, b) => a.priority - b.priority)) {
+    const key = `${candidate.component}:${candidate.version}`;
+
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    unique.push({
+      component: candidate.component,
+      version: candidate.version,
+      source: candidate.source,
+      path: candidate.path,
+    });
+  }
+
+  return unique.slice(0, 12);
+}
+
+function extractYamlScalar(block, key) {
+  const match = block.match(new RegExp(`^\\s*${escapeRegExp(key)}:\\s*(.*)$`, 'm'));
+  return match ? cleanScalar(match[1]) : null;
+}
+
+function extractChartVersion(chartName) {
+  if (!chartName) {
+    return null;
+  }
+
+  const match = chartName.match(/^longhorn-(v?\d+\.\d+\.\d+(?:[-+][A-Za-z0-9._-]+)?)$/);
+  return match ? match[1] : null;
+}
+
+function normalizeLonghornVersion(value) {
+  if (!value) {
+    return null;
+  }
+
+  const match = String(value)
+    .trim()
+    .match(/^v?(\d+\.\d+\.\d+(?:[-+][A-Za-z0-9._-]+)?)$/);
+
+  if (!match) {
+    return null;
+  }
+
+  return `v${match[1]}`;
 }
 
 async function analyzeBundleGenerationErrors(context) {
@@ -779,20 +994,18 @@ async function analyzeLonghornLogs(context) {
     pattern,
     count: 0,
     evidence: [],
+    evidenceRefs: [],
     path: null,
   }]));
 
   for (const entry of logEntries) {
-    const sample = await readTextSample(context.extractDir, entry.path);
+    const sampledLines = await readLogLineSamples(context.extractDir, entry.path);
 
-    if (!sample) {
+    if (!sampledLines.length) {
       continue;
     }
 
-    const lines = sample.content.split(/\r?\n/);
-
-    for (let index = 0; index < lines.length; index += 1) {
-      const line = lines[index];
+    for (const { line, lineNumber } of sampledLines) {
 
       for (const match of matchesByPattern.values()) {
         if (!match.pattern.test.test(line)) {
@@ -804,7 +1017,15 @@ async function analyzeLonghornLogs(context) {
         match.path ??= entry.path;
 
         if (match.evidence.length < 4) {
-          match.evidence.push(`${shortenReportPath(entry.path)}:${index + 1} ${truncate(line, 220)}`);
+          const excerpt = truncate(line, 220);
+          match.evidence.push(`${shortenReportPath(entry.path)}:${lineNumber} ${excerpt}`);
+          match.evidenceRefs.push({
+            path: entry.path,
+            lineStart: lineNumber,
+            lineEnd: lineNumber,
+            label: `${shortenReportPath(entry.path)}:${lineNumber}`,
+            excerpt,
+          });
         }
       }
     }
@@ -820,6 +1041,7 @@ async function analyzeLonghornLogs(context) {
         title: match.pattern.title,
         description: match.pattern.description,
         evidence: match.evidence,
+        evidenceRefs: match.evidenceRefs,
         count: match.count,
         path: match.path,
       }),
@@ -849,29 +1071,89 @@ async function readReportFile({ extractDir, index }, suffix) {
   };
 }
 
-async function readTextSample(rootDir, reportPath) {
+async function readLogLineSamples(rootDir, reportPath) {
   const filePath = safeResolve(rootDir, reportPath);
   const stats = await fs.stat(filePath);
   const handle = await fs.open(filePath, 'r');
 
   try {
     if (stats.size <= LOG_SAMPLE_BYTES * 2) {
-      return {
-        content: await fs.readFile(filePath, 'utf8'),
-      };
+      return linesWithNumbers(await fs.readFile(filePath, 'utf8'), 1);
     }
 
     const head = Buffer.alloc(LOG_SAMPLE_BYTES);
     const tail = Buffer.alloc(LOG_SAMPLE_BYTES);
+    const tailStart = stats.size - LOG_SAMPLE_BYTES;
     await handle.read(head, 0, LOG_SAMPLE_BYTES, 0);
-    await handle.read(tail, 0, LOG_SAMPLE_BYTES, stats.size - LOG_SAMPLE_BYTES);
+    await handle.read(tail, 0, LOG_SAMPLE_BYTES, tailStart);
+    const tailLineInfo = await tailLineInfoAfterByte(filePath, tailStart);
+    const headLines = linesWithNumbers(head.toString('utf8'), 1);
+    const tailLines = linesWithNumbers(tail.toString('utf8'), tailLineInfo.firstLineNumber, {
+      dropFirstLine: tailLineInfo.dropFirstLine,
+    });
 
-    return {
-      content: `${head.toString('utf8')}\n${tail.toString('utf8')}`,
-    };
+    return [...headLines, ...tailLines];
   } finally {
     await handle.close();
   }
+}
+
+function linesWithNumbers(content, firstLineNumber, { dropFirstLine = false } = {}) {
+  const lines = content.split(/\r?\n/);
+  const offset = dropFirstLine ? 1 : 0;
+
+  return lines
+    .slice(offset)
+    .filter((line) => line)
+    .map((line, index) => ({
+      line,
+      lineNumber: firstLineNumber + offset + index,
+    }));
+}
+
+async function tailLineInfoAfterByte(filePath, byteOffset) {
+  if (byteOffset <= 0) {
+    return {
+      firstLineNumber: 1,
+      dropFirstLine: false,
+    };
+  }
+
+  const handle = await fs.open(filePath, 'r');
+  const buffer = Buffer.alloc(64 * 1024);
+  const previousByte = Buffer.alloc(1);
+  let position = 0;
+  let newlineCount = 0;
+
+  try {
+    while (position < byteOffset) {
+      const length = Math.min(buffer.length, byteOffset - position);
+      const { bytesRead } = await handle.read(buffer, 0, length, position);
+
+      if (!bytesRead) {
+        break;
+      }
+
+      for (let index = 0; index < bytesRead; index += 1) {
+        if (buffer[index] === 10) {
+          newlineCount += 1;
+        }
+      }
+
+      position += bytesRead;
+    }
+
+    await handle.read(previousByte, 0, 1, byteOffset - 1);
+  } finally {
+    await handle.close();
+  }
+
+  const startsAtLineBoundary = previousByte[0] === 10;
+
+  return {
+    firstLineNumber: newlineCount + 1,
+    dropFirstLine: !startsAtLineBoundary,
+  };
 }
 
 function splitKubernetesItems(content) {
@@ -1052,7 +1334,17 @@ function readInlineListScalar(line, target, onKey = () => undefined) {
   onKey(match[1]);
 }
 
-function createFinding({ id, severity, category, title, description, evidence = [], count = null, path = null }) {
+function createFinding({
+  id,
+  severity,
+  category,
+  title,
+  description,
+  evidence = [],
+  evidenceRefs = [],
+  count = null,
+  path = null,
+}) {
   return {
     id,
     severity,
@@ -1060,6 +1352,7 @@ function createFinding({ id, severity, category, title, description, evidence = 
     title,
     description,
     evidence,
+    evidenceRefs,
     count,
     path,
   };

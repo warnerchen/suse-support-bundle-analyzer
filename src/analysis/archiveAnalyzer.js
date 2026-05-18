@@ -1,15 +1,20 @@
+import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import readline from 'node:readline';
 import {
   MAX_ARCHIVE_ENTRIES,
   MAX_EXTRACTED_BYTES,
   MAX_REPORT_FILE_ENTRIES,
 } from '../config.js';
-import { analyzeLonghornSupportBundle } from './longhornAnalyzer.js';
+import { analyzeLonghornSupportBundle, detectLonghornVersion } from './longhornAnalyzer.js';
 
 const execFileAsync = promisify(execFile);
+const FILE_PREVIEW_MAX_BYTES = 512 * 1024;
+const FILE_PREVIEW_CONTEXT_LINES = 80;
+const FILE_PREVIEW_MAX_LINE_WINDOW = 220;
 
 export class ArchiveAnalyzer {
   constructor({ workDir }) {
@@ -88,6 +93,117 @@ export class ArchiveAnalyzer {
       ],
     };
   }
+
+  async readExtractedFile({ jobId, reportPath, lineStart = null, lineEnd = null, matchText = '' }) {
+    const normalizedPath = normalizePreviewPath(reportPath);
+    const extractDir = path.join(this.workDir, jobId, 'extracted');
+    const filePath = await safeResolveExistingFile(extractDir, normalizedPath);
+    const stats = await fs.lstat(filePath);
+
+    if (stats.isSymbolicLink()) {
+      return unpreviewableFile(normalizedPath, 'symlink', 'Symlink preview is disabled.');
+    }
+
+    if (!stats.isFile()) {
+      return unpreviewableFile(normalizedPath, stats.isDirectory() ? 'directory' : 'other', 'Only regular files can be previewed.');
+    }
+
+    const sample = await readFirstBytes(filePath, Math.min(FILE_PREVIEW_MAX_BYTES, stats.size));
+
+    if (isBinaryBuffer(sample)) {
+      return {
+        path: normalizedPath,
+        type: 'file',
+        size: stats.size,
+        previewable: false,
+        binary: true,
+        truncated: false,
+        content: '',
+        message: 'Binary file preview is not available.',
+      };
+    }
+
+    const matchedLine = matchText ? await findMatchingLine(filePath, matchText) : null;
+    const previewLineStart = matchedLine?.lineNumber ?? lineStart;
+    const previewLineEnd = matchedLine?.lineNumber ?? lineEnd;
+
+    if (previewLineStart) {
+      const window = await readLineWindow(filePath, {
+        lineStart: previewLineStart,
+        lineEnd: previewLineEnd ?? previewLineStart,
+        contextLines: FILE_PREVIEW_CONTEXT_LINES,
+      });
+
+      return {
+        path: normalizedPath,
+        type: 'file',
+        size: stats.size,
+        previewable: true,
+        binary: false,
+        truncated: window.truncated,
+        content: window.content,
+        lineStart: window.lineStart,
+        lineEnd: window.lineEnd,
+        requestedLineStart: previewLineStart,
+        requestedLineEnd: previewLineEnd ?? previewLineStart,
+        matchedLine: matchedLine
+          ? {
+              lineNumber: matchedLine.lineNumber,
+              strategy: 'text',
+            }
+          : null,
+      };
+    }
+
+    const content = sample.toString('utf8');
+
+    return {
+      path: normalizedPath,
+      type: 'file',
+      size: stats.size,
+      previewable: true,
+      binary: false,
+      truncated: stats.size > sample.length,
+      content,
+      lineStart: 1,
+      lineEnd: countLines(content),
+      requestedLineStart: null,
+      requestedLineEnd: null,
+    };
+  }
+
+  async enrichExistingReport(report) {
+    if (report.productType !== 'longhorn' || report.inventory?.longhorn?.version) {
+      return report;
+    }
+
+    try {
+      const extractDir = path.join(this.workDir, report.jobId, 'extracted');
+      const index = await buildFileIndex(extractDir);
+      const version = await detectLonghornVersion({ extractDir, index });
+
+      if (!version) {
+        return report;
+      }
+
+      return {
+        ...report,
+        inventory: {
+          ...(report.inventory ?? {}),
+          longhorn: {
+            ...(report.inventory?.longhorn ?? {}),
+            version,
+          },
+        },
+      };
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        return report;
+      }
+
+      throw error;
+    }
+  }
 }
 
 async function analyzeProductBundle({ productType, extractDir, index }) {
@@ -112,6 +228,196 @@ async function analyzeProductBundle({ productType, extractDir, index }) {
     },
     findings: [],
   };
+}
+
+function normalizePreviewPath(reportPath) {
+  const normalizedPath = String(reportPath ?? '').replaceAll('\\', '/').replace(/^\/+/, '');
+  validateArchiveEntryPath(normalizedPath);
+  return normalizedPath;
+}
+
+async function safeResolveExistingFile(rootDir, reportPath) {
+  let rootRealPath;
+
+  try {
+    rootRealPath = await fs.realpath(rootDir);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      throw previewError(404, 'Extracted bundle files are not available for this analysis job.');
+    }
+
+    throw error;
+  }
+
+  const filePath = path.resolve(rootRealPath, reportPath);
+
+  if (!isPathInside(rootRealPath, filePath)) {
+    throw previewError(400, `File path is outside the extracted bundle: ${reportPath}`);
+  }
+
+  let fileRealPath;
+
+  try {
+    fileRealPath = await fs.realpath(filePath);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      throw previewError(404, 'File was not found in the extracted bundle.');
+    }
+
+    throw error;
+  }
+
+  if (!isPathInside(rootRealPath, fileRealPath)) {
+    throw previewError(400, `File path resolves outside the extracted bundle: ${reportPath}`);
+  }
+
+  return fileRealPath;
+}
+
+function isPathInside(rootPath, candidatePath) {
+  const relativePath = path.relative(rootPath, candidatePath);
+  return relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath));
+}
+
+async function readFirstBytes(filePath, byteCount) {
+  const handle = await fs.open(filePath, 'r');
+
+  try {
+    const buffer = Buffer.alloc(byteCount);
+    const { bytesRead } = await handle.read(buffer, 0, byteCount, 0);
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
+
+async function readLineWindow(filePath, { lineStart, lineEnd, contextLines }) {
+  const targetStart = Math.max(1, lineStart - contextLines);
+  const targetEnd = Math.max(targetStart, lineEnd + contextLines);
+  const lines = [];
+  let currentLine = 0;
+  let truncated = false;
+  let capturedBytes = 0;
+  let reachedEnd = false;
+  const input = createReadStream(filePath, { encoding: 'utf8' });
+  const reader = readline.createInterface({
+    input,
+    crlfDelay: Infinity,
+  });
+
+  try {
+    for await (const line of reader) {
+      currentLine += 1;
+
+      if (currentLine < targetStart) {
+        continue;
+      }
+
+      if (currentLine > targetEnd) {
+        reachedEnd = true;
+        break;
+      }
+
+      capturedBytes += Buffer.byteLength(line, 'utf8') + 1;
+
+      if (capturedBytes > FILE_PREVIEW_MAX_BYTES || lines.length >= FILE_PREVIEW_MAX_LINE_WINDOW) {
+        truncated = true;
+        break;
+      }
+
+      lines.push(line);
+    }
+  } finally {
+    reader.close();
+    input.destroy();
+  }
+
+  return {
+    content: lines.join('\n'),
+    lineStart: targetStart,
+    lineEnd: targetStart + Math.max(0, lines.length - 1),
+    truncated: truncated || targetStart > 1 || reachedEnd,
+  };
+}
+
+async function findMatchingLine(filePath, matchText) {
+  const needle = String(matchText ?? '').trim().replace(/\.\.\.$/, '').trim();
+
+  if (needle.length < 16) {
+    return null;
+  }
+
+  const input = createReadStream(filePath, { encoding: 'utf8' });
+  const reader = readline.createInterface({
+    input,
+    crlfDelay: Infinity,
+  });
+  let lineNumber = 0;
+
+  try {
+    for await (const line of reader) {
+      lineNumber += 1;
+
+      if (line.includes(needle)) {
+        return {
+          line,
+          lineNumber,
+        };
+      }
+    }
+  } finally {
+    reader.close();
+    input.destroy();
+  }
+
+  return null;
+}
+
+function isBinaryBuffer(buffer) {
+  if (!buffer.length) {
+    return false;
+  }
+
+  if (buffer.includes(0)) {
+    return true;
+  }
+
+  let suspicious = 0;
+
+  for (const byte of buffer.subarray(0, Math.min(buffer.length, 4096))) {
+    if (byte < 7 || (byte > 14 && byte < 32)) {
+      suspicious += 1;
+    }
+  }
+
+  return suspicious / Math.min(buffer.length, 4096) > 0.08;
+}
+
+function unpreviewableFile(reportPath, type, message) {
+  return {
+    path: reportPath,
+    type,
+    size: 0,
+    previewable: false,
+    binary: false,
+    truncated: false,
+    content: '',
+    message,
+  };
+}
+
+function countLines(content) {
+  if (!content) {
+    return 0;
+  }
+
+  return content.split(/\r?\n/).length;
+}
+
+function previewError(statusCode, message) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
 }
 
 export function inferArchiveType(filename) {

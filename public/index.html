@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SUSE Support Bundle Analyzer</title>
-    <link rel="stylesheet" href="/styles.css?v=20260511-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260518-4" />
   </head>
   <body>
     <div class="app-shell">
@@ -231,6 +231,31 @@
       </section>
     </div>
 
-    <script src="/app.js?v=20260511-1" type="module"></script>
+    <div class="evidence-backdrop" id="evidenceDrawer" hidden>
+      <aside
+        class="evidence-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="evidenceDrawerTitle"
+      >
+        <header class="evidence-header">
+          <div>
+            <p class="eyebrow">Evidence</p>
+            <h2 id="evidenceDrawerTitle">File Preview</h2>
+            <p class="evidence-path" id="evidenceDrawerPath"></p>
+          </div>
+          <button class="icon-button" id="closeEvidenceButton" type="button" aria-label="Close evidence preview">×</button>
+        </header>
+        <div class="evidence-toolbar">
+          <span id="evidenceDrawerMeta"></span>
+          <button class="secondary-button" id="copyEvidencePathButton" type="button">Copy path</button>
+        </div>
+        <div class="evidence-body" id="evidenceDrawerBody">
+          <p class="empty-report">Select a report path to preview evidence.</p>
+        </div>
+      </aside>
+    </div>
+
+    <script src="/app.js?v=20260518-4" type="module"></script>
   </body>
 </html>

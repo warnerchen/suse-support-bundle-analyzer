@@ -185,6 +185,18 @@ const server = http.createServer(async (request, response) => {
       const parts = url.pathname.split('/').filter(Boolean);
       const id = parts[2];
 
+      if (parts.length === 4 && parts[3] === 'files') {
+        const file = await analysisService.getExtractedFile(id, {
+          reportPath: url.searchParams.get('path'),
+          lineStart: parsePositiveInteger(url.searchParams.get('lineStart')),
+          lineEnd: parsePositiveInteger(url.searchParams.get('lineEnd')),
+          matchText: url.searchParams.get('matchText') ?? '',
+        });
+
+        sendJson(response, 200, { file });
+        return;
+      }
+
       if (parts.length === 4 && parts[3] === 'report') {
         const report = await analysisService.getReport(id);
 
@@ -290,3 +302,8 @@ const server = http.createServer(async (request, response) => {
 server.listen(PORT, HOST, () => {
   console.log(`SUSE Support Bundle Analyzer is running at http://${HOST}:${PORT}`);
 });
+
+function parsePositiveInteger(value) {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}

@@ -17,6 +17,13 @@ const deleteModalFilename = document.querySelector('#deleteModalFilename');
 const deleteModalMessage = document.querySelector('#deleteModalMessage');
 const cancelDeleteButton = document.querySelector('#cancelDeleteButton');
 const confirmDeleteButton = document.querySelector('#confirmDeleteButton');
+const evidenceDrawer = document.querySelector('#evidenceDrawer');
+const evidenceDrawerTitle = document.querySelector('#evidenceDrawerTitle');
+const evidenceDrawerPath = document.querySelector('#evidenceDrawerPath');
+const evidenceDrawerMeta = document.querySelector('#evidenceDrawerMeta');
+const evidenceDrawerBody = document.querySelector('#evidenceDrawerBody');
+const closeEvidenceButton = document.querySelector('#closeEvidenceButton');
+const copyEvidencePathButton = document.querySelector('#copyEvidencePathButton');
 const kbUrlImportForm = document.querySelector('#kbUrlImportForm');
 const kbFileImportForm = document.querySelector('#kbFileImportForm');
 const kbUrlInput = document.querySelector('#kbUrlInput');
@@ -38,6 +45,7 @@ let pendingDelete = null;
 let previousFocus = null;
 let pendingKbImport = null;
 let kbSources = [];
+let currentEvidencePath = '';
 
 await initialize();
 
@@ -161,7 +169,32 @@ function bindEvents() {
     }
   });
 
+  reportContent.addEventListener('click', (event) => {
+    const previewButton = event.target.closest('[data-preview-path]');
+
+    if (previewButton) {
+      openEvidencePreview({
+        path: previewButton.dataset.previewPath,
+        lineStart: toOptionalNumber(previewButton.dataset.lineStart),
+        lineEnd: toOptionalNumber(previewButton.dataset.lineEnd),
+        matchText: previewButton.dataset.matchText || '',
+      });
+    }
+  });
+  closeEvidenceButton.addEventListener('click', closeEvidenceDrawer);
+  copyEvidencePathButton.addEventListener('click', copyEvidencePath);
+  evidenceDrawer.addEventListener('click', (event) => {
+    if (event.target === evidenceDrawer) {
+      closeEvidenceDrawer();
+    }
+  });
+
   document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !evidenceDrawer.hidden) {
+      closeEvidenceDrawer();
+      return;
+    }
+
     if (event.key === 'Escape' && !deleteModal.hidden && !confirmDeleteButton.disabled) {
       closeDeleteModal();
     }
@@ -969,7 +1002,7 @@ function renderReport(report) {
           <dd>${escapeHtml(report.archive.filename)}</dd>
           <dt>Type</dt>
           <dd>${escapeHtml(report.archive.archiveType)}</dd>
-          ${renderArchiveMetadata(report.inventory?.metadata)}
+          ${renderArchiveMetadata(report.inventory)}
           <dt>SHA-256</dt>
           <dd class="mono">${escapeHtml(report.archive.sha256)}</dd>
         </dl>
@@ -1155,29 +1188,67 @@ function renderFinding(finding) {
       </div>
       <h4>${escapeHtml(finding.title)}${escapeHtml(countLabel)}</h4>
       <p>${escapeHtml(finding.description)}</p>
-      ${renderFindingEvidence(finding.evidence)}
-      ${finding.path ? `<div class="finding-path mono">${escapeHtml(finding.path)}</div>` : ''}
+      ${renderFindingEvidence(finding.evidence, finding.evidenceRefs)}
+      ${finding.path ? renderEvidencePathButton(finding.path) : ''}
     </article>
   `;
 }
 
-function renderFindingEvidence(evidence = []) {
+function renderFindingEvidence(evidence = [], evidenceRefs = []) {
   if (!evidence.length) {
     return '';
   }
 
   return `
     <ul class="finding-evidence">
-      ${evidence.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}
+      ${evidence
+        .map((line, index) => {
+          const ref = evidenceRefs[index];
+
+          if (!ref?.path) {
+            return `<li class="finding-evidence-item">${escapeHtml(line)}</li>`;
+          }
+
+          return `
+            <li class="finding-evidence-item clickable">
+              <button
+                class="evidence-link"
+                type="button"
+                data-preview-path="${escapeHtml(ref.path)}"
+                data-line-start="${escapeHtml(ref.lineStart ?? '')}"
+                data-line-end="${escapeHtml(ref.lineEnd ?? ref.lineStart ?? '')}"
+                data-match-text="${escapeHtml(ref.excerpt ?? line)}"
+              >
+                ${escapeHtml(line)}
+              </button>
+            </li>
+          `;
+        })
+        .join('')}
     </ul>
   `;
 }
 
-function renderArchiveMetadata(metadata = {}) {
+function renderEvidencePathButton(reportPath) {
+  return `
+    <button
+      class="evidence-link finding-path mono"
+      type="button"
+      data-preview-path="${escapeHtml(reportPath)}"
+    >
+      ${escapeHtml(reportPath)}
+    </button>
+  `;
+}
+
+function renderArchiveMetadata(inventory = {}) {
+  const metadata = inventory.metadata ?? {};
+  const longhornVersion = inventory.longhorn?.version?.version;
   const rows = [
     ['Kubernetes', metadata.kubernetesversion],
+    ['Longhorn', longhornVersion],
     ['Created', metadata.bundlecreatedat],
-    ['Issue', metadata.issuedescription],
+    ['Issue Description', metadata.issuedescription],
   ].filter(([, value]) => value);
 
   return rows
@@ -1240,7 +1311,17 @@ function renderFileList(files) {
       ${files
         .map(
           (file) =>
-            `<li><span title="${escapeHtml(file.path)}">${escapeHtml(file.path)}</span><strong>${formatBytes(file.size)}</strong></li>`,
+            `<li>
+              <button
+                class="evidence-link compact-file-link"
+                type="button"
+                title="${escapeHtml(file.path)}"
+                data-preview-path="${escapeHtml(file.path)}"
+              >
+                ${escapeHtml(file.path)}
+              </button>
+              <strong>${formatBytes(file.size)}</strong>
+            </li>`,
         )
         .join('')}
     </ul>
@@ -1256,12 +1337,145 @@ function renderFileIndex(files) {
     .map(
       (file) => `
         <div class="file-index-row">
-          <span title="${escapeHtml(file.path)}">${escapeHtml(file.path)}</span>
+          <button
+            class="evidence-link file-index-link"
+            type="button"
+            title="${escapeHtml(file.path)}"
+            data-preview-path="${escapeHtml(file.path)}"
+          >
+            ${escapeHtml(file.path)}
+          </button>
           <strong>${formatBytes(file.size)}</strong>
         </div>
       `,
     )
     .join('');
+}
+
+async function openEvidencePreview({ path: reportPath, lineStart = null, lineEnd = null, matchText = '' }) {
+  const jobId = reportContent.dataset.jobId;
+
+  if (!jobId || !reportPath) {
+    return;
+  }
+
+  currentEvidencePath = reportPath;
+  evidenceDrawer.hidden = false;
+  document.body.classList.add('modal-open');
+  evidenceDrawerTitle.textContent = 'Loading file';
+  evidenceDrawerPath.textContent = reportPath;
+  evidenceDrawerMeta.textContent = '';
+  evidenceDrawerBody.innerHTML = '<p class="empty-report">Loading evidence</p>';
+  closeEvidenceButton.focus();
+
+  const params = new URLSearchParams({ path: reportPath });
+
+  if (lineStart) {
+    params.set('lineStart', String(lineStart));
+  }
+
+  if (lineEnd) {
+    params.set('lineEnd', String(lineEnd));
+  }
+
+  if (matchText) {
+    params.set('matchText', matchText);
+  }
+
+  try {
+    const response = await fetch(`/api/analysis-jobs/${encodeURIComponent(jobId)}/files?${params}`);
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error?.message ?? 'Unable to load evidence file.');
+    }
+
+    renderEvidenceFile(payload.file);
+  } catch (error) {
+    evidenceDrawerTitle.textContent = 'File Preview';
+    evidenceDrawerBody.innerHTML = `<p class="empty-report error-text">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+function renderEvidenceFile(file = {}) {
+  currentEvidencePath = file.path ?? currentEvidencePath;
+  evidenceDrawerTitle.textContent = file.previewable ? 'File Preview' : 'Preview Unavailable';
+  evidenceDrawerPath.textContent = currentEvidencePath;
+  evidenceDrawerMeta.textContent = [
+    formatBytes(file.size),
+    file.lineStart ? `lines ${file.lineStart}-${file.lineEnd}` : null,
+    file.truncated ? 'partial preview' : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+  if (!file.previewable) {
+    evidenceDrawerBody.innerHTML = `<p class="empty-report">${escapeHtml(file.message ?? 'This file cannot be previewed.')}</p>`;
+    return;
+  }
+
+  evidenceDrawerBody.innerHTML = `
+    <div class="evidence-code-wrap">
+      ${renderEvidenceCode(file)}
+    </div>
+  `;
+  scrollHighlightedEvidenceIntoView();
+}
+
+function renderEvidenceCode(file) {
+  const lines = String(file.content ?? '').split(/\r?\n/);
+  const firstLine = file.lineStart ?? 1;
+  const requestedStart = file.requestedLineStart ?? null;
+  const requestedEnd = file.requestedLineEnd ?? requestedStart;
+
+  return lines
+    .map((line, index) => {
+      const lineNumber = firstLine + index;
+      const highlighted =
+        requestedStart && lineNumber >= requestedStart && lineNumber <= requestedEnd;
+
+      return `
+        <div class="evidence-code-line${highlighted ? ' highlighted' : ''}">
+          <span class="evidence-line-number">${lineNumber}</span>
+          <code>${escapeHtml(line || ' ')}</code>
+        </div>
+      `;
+    })
+    .join('');
+}
+
+function scrollHighlightedEvidenceIntoView() {
+  requestAnimationFrame(() => {
+    const highlightedLine = evidenceDrawerBody.querySelector('.evidence-code-line.highlighted');
+
+    if (!highlightedLine) {
+      return;
+    }
+
+    highlightedLine.scrollIntoView({
+      block: 'center',
+      inline: 'nearest',
+    });
+  });
+}
+
+function closeEvidenceDrawer() {
+  evidenceDrawer.hidden = true;
+  document.body.classList.remove('modal-open');
+  currentEvidencePath = '';
+}
+
+async function copyEvidencePath() {
+  if (!currentEvidencePath) {
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(currentEvidencePath);
+    evidenceDrawerMeta.textContent = `${evidenceDrawerMeta.textContent || 'Path'} · copied`;
+  } catch {
+    evidenceDrawerMeta.textContent = `${evidenceDrawerMeta.textContent || 'Path'} · copy failed`;
+  }
 }
 
 function productLabel(productType) {
@@ -1321,6 +1535,11 @@ function formatBytes(bytes) {
 
 function formatInteger(value) {
   return Number.isFinite(value) ? new Intl.NumberFormat().format(value) : '0';
+}
+
+function toOptionalNumber(value) {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function formatDate(value) {
