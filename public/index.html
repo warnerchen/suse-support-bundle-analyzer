@@ -4,34 +4,65 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SUSE Support Bundle Analyzer</title>
-    <link rel="stylesheet" href="/styles.css?v=20260518-4" />
+    <link rel="stylesheet" href="/styles.css?v=20260519-4" />
   </head>
   <body>
     <div class="app-shell">
       <header class="topbar">
-        <div class="brand-lockup" aria-label="SUSE Support Bundle Analyzer">
+        <div class="brand-lockup" aria-label="SUSE Support Bundle Analyzer" data-i18n-aria-label="documentTitle">
           <span class="brand-mark" aria-hidden="true"></span>
           <div>
-            <p class="eyebrow">SUSE Technical Support</p>
-            <h1>Support Bundle Analyzer</h1>
+            <p class="eyebrow" data-i18n="brandEyebrow">SUSE Technical Support</p>
+            <h1 data-i18n="appTitle">Support Bundle Analyzer</h1>
           </div>
         </div>
-        <div class="status-pill" id="apiStatus">Checking API</div>
+        <div class="topbar-actions">
+          <div class="language-control" id="languageControl">
+            <button
+              class="language-button"
+              id="languageButton"
+              type="button"
+              aria-haspopup="listbox"
+              aria-expanded="false"
+              aria-label="Language"
+              data-i18n-aria-label="languageLabel"
+            >
+              <span id="languageButtonLabel">English</span>
+              <span class="language-chevron" aria-hidden="true"></span>
+            </button>
+            <div
+              class="language-menu"
+              id="languageMenu"
+              role="listbox"
+              aria-label="Language"
+              data-i18n-aria-label="languageLabel"
+              hidden
+            >
+              <button class="language-option" type="button" role="option" data-language-option="en" aria-selected="true">
+                English
+              </button>
+              <button class="language-option" type="button" role="option" data-language-option="zh-CN" aria-selected="false">
+                简体中文
+              </button>
+            </div>
+          </div>
+          <div class="status-pill" id="apiStatus">Checking API</div>
+        </div>
       </header>
 
       <main class="workspace">
         <section class="upload-panel" aria-labelledby="uploadTitle">
           <div class="panel-heading">
             <div>
-              <p class="eyebrow">Bundle Intake</p>
-              <h2 id="uploadTitle">Upload Support Bundle</h2>
+              <p class="eyebrow" data-i18n="bundleIntake">Bundle Intake</p>
+              <h2 id="uploadTitle" data-i18n="uploadTitle">Upload Support Bundle</h2>
             </div>
             <div class="limit-label" id="uploadLimit"></div>
           </div>
 
           <form id="uploadForm" class="upload-form">
             <fieldset>
-              <legend>Product</legend>
+              <legend data-i18n="product">Product</legend>
               <div class="segmented-control" id="productOptions">
                 <label class="segment selected">
                   <input type="radio" name="productType" value="longhorn" checked />
@@ -56,8 +87,8 @@
                 <span class="archive-icon"></span>
               </div>
               <div>
-                <label for="bundleFile" class="file-label">Choose bundle archive</label>
-                <p id="fileName" class="file-name">No file selected</p>
+                <label for="bundleFile" class="file-label" data-i18n="chooseBundleArchive">Choose bundle archive</label>
+                <p id="fileName" class="file-name" data-i18n="noFileSelected">No file selected</p>
               </div>
             </div>
 
@@ -69,7 +100,7 @@
               <p class="form-message" id="formMessage"></p>
               <button class="primary-button" id="submitButton" type="submit">
                 <span class="button-icon" aria-hidden="true">↑</span>
-                Upload
+                <span data-i18n="upload">Upload</span>
               </button>
             </div>
           </form>
@@ -78,10 +109,18 @@
         <section class="table-panel" aria-labelledby="recentTitle">
           <div class="panel-heading">
             <div>
-              <p class="eyebrow">Queue</p>
-              <h2 id="recentTitle">Recent Uploads</h2>
+              <p class="eyebrow" data-i18n="queue">Queue</p>
+              <h2 id="recentTitle" data-i18n="recentUploads">Recent Uploads</h2>
             </div>
-            <button class="icon-button" id="refreshButton" type="button" aria-label="Refresh recent uploads" title="Refresh">
+            <button
+              class="icon-button"
+              id="refreshButton"
+              type="button"
+              aria-label="Refresh recent uploads"
+              title="Refresh"
+              data-i18n-aria-label="refreshRecentUploads"
+              data-i18n-title="refresh"
+            >
               ↻
             </button>
           </div>
@@ -90,19 +129,19 @@
             <table>
               <thead>
                 <tr>
-                  <th>Product</th>
-                  <th>Filename</th>
-                  <th>Status</th>
-                  <th>Analysis</th>
-                  <th>Size</th>
-                  <th>Uploaded</th>
-                  <th>Report</th>
-                  <th>Delete</th>
+                  <th data-i18n="product">Product</th>
+                  <th data-i18n="filename">Filename</th>
+                  <th data-i18n="status">Status</th>
+                  <th data-i18n="analysis">Analysis</th>
+                  <th data-i18n="size">Size</th>
+                  <th data-i18n="uploaded">Uploaded</th>
+                  <th data-i18n="report">Report</th>
+                  <th data-i18n="delete">Delete</th>
                 </tr>
               </thead>
               <tbody id="bundleRows">
                 <tr>
-                  <td colspan="8" class="empty-cell">Loading uploads</td>
+                  <td colspan="8" class="empty-cell" data-i18n="loadingUploads">Loading uploads</td>
                 </tr>
               </tbody>
             </table>
@@ -112,8 +151,8 @@
         <section class="kb-panel" aria-labelledby="kbTitle">
           <div class="panel-heading">
             <div>
-              <p class="eyebrow">Knowledge Base</p>
-              <h2 id="kbTitle">KB Vector Index</h2>
+              <p class="eyebrow" data-i18n="knowledgeBase">Knowledge Base</p>
+              <h2 id="kbTitle" data-i18n="kbVectorIndex">KB Vector Index</h2>
             </div>
           </div>
 
@@ -121,9 +160,9 @@
             <div class="kb-import-stack">
               <div class="kb-import-options">
                 <label class="kb-product-scope" for="kbProductType">
-                  <span>Product Scope</span>
+                  <span data-i18n="productScope">Product Scope</span>
                   <select id="kbProductType">
-                    <option value="">Auto detect</option>
+                    <option value="" data-i18n="autoDetect">Auto detect</option>
                     <option value="longhorn">Longhorn</option>
                     <option value="harvester">Harvester</option>
                   </select>
@@ -131,18 +170,19 @@
                 <div class="kb-expand-option">
                   <label class="kb-checkbox">
                     <input id="kbExpandLinks" type="checkbox" checked />
-                    <span>Expand same-path links</span>
+                    <span data-i18n="expandSamePathLinks">Expand same-path links</span>
                   </label>
                   <span class="kb-tooltip">
                     <button
                       class="kb-tooltip-trigger"
                       type="button"
                       aria-label="Explain URL import expansion"
+                      data-i18n-aria-label="explainUrlImportExpansion"
                       aria-describedby="kbExpandTooltip"
                     >
                       i
                     </button>
-                    <span class="kb-tooltip-bubble" id="kbExpandTooltip" role="tooltip">
+                    <span class="kb-tooltip-bubble" id="kbExpandTooltip" role="tooltip" data-i18n="expandTooltip">
                       Import the entered URL. For directory-style pages, it will also import document
                       links under the same site and path prefix. Off-site links, static assets, PDFs,
                       and archive files will be skipped. If importing the URL of a single article,
@@ -153,20 +193,20 @@
               </div>
 
               <form id="kbUrlImportForm" class="kb-import-form">
-                <label class="kb-field-label" for="kbUrlInput">Source URLs</label>
+                <label class="kb-field-label" for="kbUrlInput" data-i18n="sourceUrls">Source URLs</label>
                 <div class="kb-import-control">
                   <textarea id="kbUrlInput" rows="2" placeholder="https://longhorn.io/kb/"></textarea>
-                  <button class="primary-button kb-import-button" id="kbImportButton" type="submit">Preview URLs</button>
+                  <button class="primary-button kb-import-button" id="kbImportButton" type="submit" data-i18n="previewUrls">Preview URLs</button>
                 </div>
               </form>
 
               <form id="kbFileImportForm" class="kb-file-form">
-                <div class="kb-field-label">Markdown Files</div>
+                <div class="kb-field-label" data-i18n="markdownFiles">Markdown Files</div>
                 <div class="kb-file-control">
                   <input id="kbFileInput" class="kb-file-input" type="file" accept=".md,.markdown,text/markdown" multiple />
-                  <label class="kb-file-picker" for="kbFileInput">Choose files</label>
-                  <span id="kbFileName" class="kb-file-name">No files selected</span>
-                  <button class="primary-button kb-file-import-button" id="kbFileImportButton" type="submit">Preview Files</button>
+                  <label class="kb-file-picker" for="kbFileInput" data-i18n="chooseFiles">Choose files</label>
+                  <span id="kbFileName" class="kb-file-name" data-i18n="noFilesSelected">No files selected</span>
+                  <button class="primary-button kb-file-import-button" id="kbFileImportButton" type="submit" data-i18n="previewFiles">Preview Files</button>
                 </div>
               </form>
 
@@ -174,21 +214,21 @@
               <div class="kb-preview-panel" id="kbPreviewPanel" hidden></div>
             </div>
             <div class="kb-status-panel">
-              <div class="kb-field-label">Index Status</div>
+              <div class="kb-field-label" data-i18n="indexStatus">Index Status</div>
               <div class="kb-stats" id="kbStats">
-                <p class="empty-report">Loading KB status</p>
+                <p class="empty-report" data-i18n="loadingKbStatus">Loading KB status</p>
               </div>
               <div class="kb-sources-header">
-                <div class="kb-field-label">Sources</div>
-                <select id="kbSourceFilter" aria-label="Filter KB sources by product">
-                  <option value="">All products</option>
+                <div class="kb-field-label" data-i18n="sources">Sources</div>
+                <select id="kbSourceFilter" aria-label="Filter KB sources by product" data-i18n-aria-label="filterKbSources">
+                  <option value="" data-i18n="allProducts">All products</option>
                   <option value="longhorn">Longhorn</option>
                   <option value="harvester">Harvester</option>
-                  <option value="unknown">Unknown</option>
+                  <option value="unknown" data-i18n="unknown">Unknown</option>
                 </select>
               </div>
               <div class="kb-source-list" id="kbSourceList">
-                <p class="empty-report">Loading KB sources</p>
+                <p class="empty-report" data-i18n="loadingKbSources">Loading KB sources</p>
               </div>
             </div>
           </div>
@@ -197,12 +237,12 @@
         <section class="report-panel" id="analysisReportPanel" aria-labelledby="reportTitle">
           <div class="panel-heading">
             <div>
-              <p class="eyebrow">Analysis</p>
-              <h2 id="reportTitle">File Index Report</h2>
+              <p class="eyebrow" data-i18n="analysis">Analysis</p>
+              <h2 id="reportTitle" data-i18n="fileIndexReport">File Index Report</h2>
             </div>
           </div>
           <div id="reportContent" class="report-content">
-            <p class="empty-report">Completed analysis reports will appear here.</p>
+            <p class="empty-report" data-i18n="reportsWillAppear">Completed analysis reports will appear here.</p>
           </div>
         </section>
       </main>
@@ -218,15 +258,15 @@
       >
         <span class="modal-alert-mark" aria-hidden="true">!</span>
         <div class="modal-copy">
-          <p class="eyebrow">Delete Bundle</p>
-          <h2 id="deleteModalTitle">Delete uploaded support bundle?</h2>
-          <p id="deleteModalDescription">The uploaded archive and related analysis data will be removed.</p>
+          <p class="eyebrow" data-i18n="deleteBundle">Delete Bundle</p>
+          <h2 id="deleteModalTitle" data-i18n="deleteUploadedBundle">Delete uploaded support bundle?</h2>
+          <p id="deleteModalDescription" data-i18n="deleteUploadedBundleDescription">The uploaded archive and related analysis data will be removed.</p>
           <p class="delete-target" id="deleteModalFilename"></p>
           <p class="modal-message" id="deleteModalMessage" role="status" aria-live="polite"></p>
         </div>
         <div class="modal-actions">
-          <button class="secondary-button" id="cancelDeleteButton" type="button">Cancel</button>
-          <button class="danger-button" id="confirmDeleteButton" type="button">Delete</button>
+          <button class="secondary-button" id="cancelDeleteButton" type="button" data-i18n="cancel">Cancel</button>
+          <button class="danger-button" id="confirmDeleteButton" type="button" data-i18n="delete">Delete</button>
         </div>
       </section>
     </div>
@@ -240,22 +280,22 @@
       >
         <header class="evidence-header">
           <div>
-            <p class="eyebrow">Evidence</p>
-            <h2 id="evidenceDrawerTitle">File Preview</h2>
+            <p class="eyebrow" data-i18n="evidence">Evidence</p>
+            <h2 id="evidenceDrawerTitle" data-i18n="filePreview">File Preview</h2>
             <p class="evidence-path" id="evidenceDrawerPath"></p>
           </div>
-          <button class="icon-button" id="closeEvidenceButton" type="button" aria-label="Close evidence preview">×</button>
+          <button class="icon-button" id="closeEvidenceButton" type="button" aria-label="Close evidence preview" data-i18n-aria-label="closeEvidencePreview">×</button>
         </header>
         <div class="evidence-toolbar">
           <span id="evidenceDrawerMeta"></span>
-          <button class="secondary-button" id="copyEvidencePathButton" type="button">Copy path</button>
+          <button class="secondary-button" id="copyEvidencePathButton" type="button" data-i18n="copyPath">Copy path</button>
         </div>
         <div class="evidence-body" id="evidenceDrawerBody">
-          <p class="empty-report">Select a report path to preview evidence.</p>
+          <p class="empty-report" data-i18n="selectReportPath">Select a report path to preview evidence.</p>
         </div>
       </aside>
     </div>
 
-    <script src="/app.js?v=20260518-4" type="module"></script>
+    <script src="/app.js?v=20260519-3" type="module"></script>
   </body>
 </html>
