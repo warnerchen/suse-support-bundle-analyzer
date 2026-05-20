@@ -112,6 +112,56 @@ test('enriches existing Longhorn reports with detected version', async () => {
   }
 });
 
+test('enriches existing Harvester reports with detected version', async () => {
+  const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'archive-harvester-report-enrich-'));
+  const analyzer = new ArchiveAnalyzer({ workDir });
+  const appsPath = path.join(
+    workDir,
+    'job-1',
+    'extracted',
+    'yamls/namespaced/harvester-system/catalog.cattle.io/v1/apps.yaml',
+  );
+
+  try {
+    await fs.mkdir(path.dirname(appsPath), { recursive: true });
+    await fs.writeFile(
+      appsPath,
+      [
+        'apiVersion: v1',
+        'items:',
+        '- apiVersion: catalog.cattle.io/v1',
+        '  kind: App',
+        '  metadata:',
+        '    name: harvester',
+        '    namespace: harvester-system',
+        '  status:',
+        '    chart:',
+        '      metadata:',
+        '        version: 1.5.1',
+        '    summary:',
+        '      state: deployed',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const enriched = await analyzer.enrichExistingReport({
+      jobId: 'job-1',
+      productType: 'harvester',
+      inventory: {
+        metadata: {},
+        harvester: {
+          pods: { total: 1 },
+        },
+      },
+    });
+
+    assert.equal(enriched.inventory.harvester.version.version, 'v1.5.1');
+    assert.equal(enriched.inventory.harvester.pods.total, 1);
+  } finally {
+    await fs.rm(workDir, { recursive: true, force: true });
+  }
+});
+
 test('rejects unsafe extracted file preview paths', async () => {
   const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'archive-preview-unsafe-'));
   const analyzer = new ArchiveAnalyzer({ workDir });

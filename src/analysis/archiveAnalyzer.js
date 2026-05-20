@@ -9,6 +9,7 @@ import {
   MAX_EXTRACTED_BYTES,
   MAX_REPORT_FILE_ENTRIES,
 } from '../config.js';
+import { analyzeHarvesterSupportBundle, detectHarvesterVersion } from './harvesterAnalyzer.js';
 import { analyzeLonghornSupportBundle, detectLonghornVersion } from './longhornAnalyzer.js';
 
 const execFileAsync = promisify(execFile);
@@ -173,14 +174,21 @@ export class ArchiveAnalyzer {
   }
 
   async enrichExistingReport(report) {
-    if (report.productType !== 'longhorn' || report.inventory?.longhorn?.version) {
+    if (
+      (report.productType === 'longhorn' && report.inventory?.longhorn?.version) ||
+      (report.productType === 'harvester' && report.inventory?.harvester?.version) ||
+      !['longhorn', 'harvester'].includes(report.productType)
+    ) {
       return report;
     }
 
     try {
       const extractDir = path.join(this.workDir, report.jobId, 'extracted');
       const index = await buildFileIndex(extractDir);
-      const version = await detectLonghornVersion({ extractDir, index });
+      const version =
+        report.productType === 'harvester'
+          ? await detectHarvesterVersion({ extractDir, index })
+          : await detectLonghornVersion({ extractDir, index });
 
       if (!version) {
         return report;
@@ -190,8 +198,8 @@ export class ArchiveAnalyzer {
         ...report,
         inventory: {
           ...(report.inventory ?? {}),
-          longhorn: {
-            ...(report.inventory?.longhorn ?? {}),
+          [report.productType]: {
+            ...(report.inventory?.[report.productType] ?? {}),
             version,
           },
         },
@@ -209,6 +217,10 @@ export class ArchiveAnalyzer {
 async function analyzeProductBundle({ productType, extractDir, index }) {
   if (productType === 'longhorn') {
     return analyzeLonghornSupportBundle({ extractDir, index });
+  }
+
+  if (productType === 'harvester') {
+    return analyzeHarvesterSupportBundle({ extractDir, index });
   }
 
   return {

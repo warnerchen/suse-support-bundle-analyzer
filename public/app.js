@@ -207,6 +207,7 @@ const TRANSLATIONS = {
     created: 'Created',
     issueDescription: 'Issue Description',
     longhornInventory: 'Longhorn Inventory',
+    harvesterInventory: 'Harvester Inventory',
     largestFiles: 'Largest Files',
     indexedFiles: 'Indexed Files',
     indexedFilesLimited: ({ limit }) => `Indexed Files · first ${limit}`,
@@ -223,10 +224,16 @@ const TRANSLATIONS = {
     noFindings: 'No findings detected by current rules.',
     matches: ({ count }) => ` · ${count} matches`,
     noLonghornInventory: 'No Longhorn inventory found',
+    noHarvesterInventory: 'No Harvester inventory found',
     volumes: 'Volumes',
     replicas: 'Replicas',
     nodes: 'Nodes',
     pods: 'Pods',
+    applications: 'Apps',
+    addons: 'Addons',
+    vmImages: 'VM Images',
+    networks: 'Networks',
+    virtualization: 'Virtualization',
     events: 'Events',
     logs: 'Logs',
     noEntriesFound: 'No entries found',
@@ -237,6 +244,9 @@ const TRANSLATIONS = {
     running: 'running',
     ready: 'ready',
     steady: 'steady',
+    deployed: 'deployed',
+    imported: 'imported',
+    available: 'available',
     normal: 'normal',
     quiet: 'quiet',
     unhealthy: ({ count }) => `${count} unhealthy`,
@@ -244,6 +254,10 @@ const TRANSLATIONS = {
     withIssues: ({ count }) => `${count} with issues`,
     restarted: ({ count }) => `${count} restarted`,
     warnings: ({ count }) => `${count} warnings`,
+    notDeployed: ({ count }) => `${count} not deployed`,
+    failedItems: ({ count }) => `${count} failed`,
+    notReady: ({ count }) => `${count} not ready`,
+    unavailable: ({ count }) => `${count} unavailable`,
     logMatches: ({ count }) => `${count} matches`,
   },
   'zh-CN': {
@@ -399,6 +413,7 @@ const TRANSLATIONS = {
     created: '创建时间',
     issueDescription: '问题描述',
     longhornInventory: 'Longhorn 清单',
+    harvesterInventory: 'Harvester 清单',
     largestFiles: '最大文件',
     indexedFiles: '已索引文件',
     indexedFilesLimited: ({ limit }) => `已索引文件 · 前 ${limit} 个`,
@@ -415,10 +430,16 @@ const TRANSLATIONS = {
     noFindings: '当前规则没有检测到发现项。',
     matches: ({ count }) => ` · ${count} 个匹配`,
     noLonghornInventory: '没有找到 Longhorn 清单',
+    noHarvesterInventory: '没有找到 Harvester 清单',
     volumes: '卷',
     replicas: '副本',
     nodes: '节点',
     pods: 'Pod',
+    applications: '应用',
+    addons: 'Addon',
+    vmImages: 'VM 镜像',
+    networks: '网络',
+    virtualization: '虚拟化',
     events: '事件',
     logs: '日志',
     noEntriesFound: '没有找到条目',
@@ -429,6 +450,9 @@ const TRANSLATIONS = {
     running: '运行中',
     ready: '就绪',
     steady: '稳定',
+    deployed: '已部署',
+    imported: '已导入',
+    available: '可用',
     normal: '正常',
     quiet: '安静',
     unhealthy: ({ count }) => `${count} 个不健康`,
@@ -436,6 +460,10 @@ const TRANSLATIONS = {
     withIssues: ({ count }) => `${count} 个有问题`,
     restarted: ({ count }) => `${count} 个已重启`,
     warnings: ({ count }) => `${count} 个警告`,
+    notDeployed: ({ count }) => `${count} 个未部署`,
+    failedItems: ({ count }) => `${count} 个失败`,
+    notReady: ({ count }) => `${count} 个未就绪`,
+    unavailable: ({ count }) => `${count} 个不可用`,
     logMatches: ({ count }) => `${count} 个匹配`,
   },
 };
@@ -490,6 +518,14 @@ const CATEGORY_LABELS = {
     'Longhorn Replica': 'Longhorn 副本',
     'Longhorn Node': 'Longhorn 节点',
     'Longhorn Pod': 'Longhorn Pod',
+    'Harvester Logs': 'Harvester 日志',
+    'Harvester Node': 'Harvester 节点',
+    'Harvester Pod': 'Harvester Pod',
+    'Harvester App': 'Harvester 应用',
+    'Harvester Addon': 'Harvester Addon',
+    'Harvester Image': 'Harvester 镜像',
+    'Harvester Network': 'Harvester 网络',
+    Virtualization: '虚拟化',
   },
 };
 const FINDING_TEXT = {
@@ -529,6 +565,58 @@ const FINDING_TEXT = {
     'longhorn-warning-events': {
       title: 'longhorn-system 中发现 Warning 事件',
       description: 'Kubernetes 在 Longhorn namespace 中记录了 Warning 事件。',
+    },
+    'harvester-bundle-generation-errors': {
+      title: 'Support bundle 采集存在错误',
+      description: 'Bundle 生成器报告部分资源或 Pod 日志无法采集，因此分析结果可能缺少这些细节。',
+    },
+    'harvester-pods-with-container-restarts': {
+      title: 'Harvester Pod 存在容器重启',
+      description: 'harvester-system 中一个或多个 Pod 报告了非零容器重启次数。',
+    },
+    'harvester-apps-not-deployed': {
+      title: 'Harvester 应用未完全部署',
+      description: 'harvester-system 中一个或多个 catalog app 没有处于 deployed 状态。',
+    },
+    'harvester-addons-not-ready': {
+      title: '启用的 Harvester Addon 未就绪',
+      description: '一个或多个启用的 Harvester Addon 处于失败或进行中状态。',
+    },
+    'harvester-vm-images-not-imported': {
+      title: 'VM 镜像未完全导入',
+      description: '一个或多个 Harvester VM 镜像不是 Imported=True，或报告了导入失败次数。',
+    },
+    'harvester-vlan-status-not-ready': {
+      title: 'VLAN 状态未就绪',
+      description: '一个或多个 Harvester VLANStatus 资源未就绪。',
+    },
+    'harvester-kubevirt-not-ready': {
+      title: 'KubeVirt 未完全就绪',
+      description: 'KubeVirt 状态不是完全 deployed 和 available。',
+    },
+    'harvester-cdi-not-ready': {
+      title: 'CDI 未完全就绪',
+      description: 'CDI 状态不是完全 deployed 和 available。',
+    },
+    'harvester-log-webhook-errors': {
+      title: 'Harvester webhook 返回错误',
+      description: 'Harvester 或 KubeVirt 日志包含 webhook 失败，可能阻塞节点更新、VM 生命周期操作或 API admission 请求。',
+    },
+    'harvester-log-virtualization-scheduling': {
+      title: '虚拟化日志包含调度或迁移错误',
+      description: 'KubeVirt 或 scheduler 日志包含 unschedulable、节点选择器或迁移相关消息，可能解释 VM 放置失败。',
+    },
+    'harvester-log-network-offload': {
+      title: '网络日志提到 offload 设置',
+      description: 'Harvester 网络日志提到 GRO、GSO、offload 或 ethtool。排查 VM 网络吞吐或包处理问题时建议查看。',
+    },
+    'harvester-log-error-lines': {
+      title: 'Harvester 平台日志包含 error 级别行',
+      description: '一个或多个 Harvester 平台日志包含 error 级别消息。建议查看证据行中的首批匹配文件。',
+    },
+    'harvester-warning-events': {
+      title: 'harvester-system 中发现 Warning 事件',
+      description: 'Kubernetes 在 Harvester namespace 中记录了 Warning 事件。',
     },
   },
 };
@@ -610,6 +698,63 @@ const GROUP_TEXT = {
         '如果缺失日志对 case 很关键，请重新采集 bundle 或直接查询该 Pod。',
       ],
     },
+    'harvester-control-plane-health': {
+      title: 'Harvester 控制面需要关注',
+      description: 'Harvester API、webhook、Addon 和 controller Pod 共同支撑 VM 与集群管理。重启或 webhook 错误会引发次生失败。',
+      impact: 'VM 操作、节点更新、admission 检查和 dashboard API 请求可能失败或间歇性异常。',
+      recommendedChecks: [
+        '优先检查重启次数最高的 Harvester Pod，并与 webhook 错误时间对齐。',
+        '在判断依赖组件健康前，先打开相关 Harvester app 或 Addon YAML。',
+        '如果 webhook 错误集中在启动阶段，确认所有 Pod Ready 后错误是否停止。',
+      ],
+    },
+    'harvester-virtualization-readiness': {
+      title: '需要检查虚拟化就绪状态',
+      description: 'KubeVirt、CDI、VM 镜像导入状态和调度日志共同说明 Harvester 是否能可靠放置和启动 VM。',
+      impact: '当这一层退化时，VM 创建、镜像上传/导入、节点维护或在线迁移可能失败。',
+      recommendedChecks: [
+        '确认 KubeVirt 和 CDI phase 为 Deployed，Available=True 且 Degraded=False。',
+        '对未 Imported 或 RetryLimitExceeded=True 的镜像打开 VM image YAML。',
+        '对调度消息，检查节点选择器、taint、label、维护状态或 cordon 状态。',
+      ],
+    },
+    'harvester-network-health': {
+      title: '需要检查 Harvester 网络健康状态',
+      description: 'VLAN status 和网络相关日志可以解释 VM 连接、bridge、multus 或 offload 相关症状。',
+      impact: '受影响 VM 可能无法接入预期网络，或出现连接质量下降。',
+      recommendedChecks: [
+        '打开 VLANStatus 资源，确认每个节点和 VLAN config 都是 ready=True。',
+        '当 VLANStatus 未就绪时，检查 link monitor、multus 或 whereabouts 日志。',
+        '对 offload 发现项，在修改 VM 网络前先确认相关 NIC 的 GRO/GSO 设置。',
+      ],
+    },
+    'harvester-node-health': {
+      title: 'Harvester 节点健康存在信号',
+      description: 'Kubernetes 节点 readiness、pressure、etcd voter 状态和 Harvester NTP 注解是稳定 VM 调度的基础信号。',
+      impact: '问题节点可能影响 VM 放置、迁移、控制面可用性，或时间敏感的证书和 token 流程。',
+      recommendedChecks: [
+        '一起查看节点 Ready、pressure 和 EtcdIsVoter 条件。',
+        '在调试时间戳敏感问题前，确认所有节点 NTP 同步健康。',
+      ],
+    },
+    'harvester-platform-events-and-logs': {
+      title: '平台事件和日志包含警告',
+      description: 'Bundle 包含未被更具体规则归类的 Kubernetes Warning 事件或 Harvester 日志错误。',
+      impact: '这些信号可能指向启动阶段抖动，或需要人工复核的缺失细节。',
+      recommendedChecks: [
+        '打开第一条引用的日志或事件，判断它是否与用户症状时间线一致。',
+        '相比一次性的启动噪声，启动后持续重复的错误优先级更高。',
+      ],
+    },
+    'harvester-collection-gaps': {
+      title: 'Support bundle 存在采集缺口',
+      description: 'Support bundle 生成器无法采集所有请求的 API 资源或 Pod 日志。',
+      impact: '报告仍然有价值，但某个日志或资源不存在不能被视为健康证明。',
+      recommendedChecks: [
+        '在判断某个资源不可用前，先查看 bundleGenerationError.log。',
+        '如果缺失的 Harvester、KubeVirt 或 CDI 日志对 case 很关键，请重新采集 bundle 或直接查询该 Pod。',
+      ],
+    },
   },
 };
 const EVIDENCE_LABELS = {
@@ -641,6 +786,23 @@ const EVIDENCE_LABELS = {
     'Total Longhorn pods': 'Longhorn Pod 总数',
     'Firing alerts': '触发中告警',
     'Collection errors': '采集错误',
+    'Harvester pods with restarts': '发生重启的 Harvester Pod',
+    'Apps not deployed': '未部署应用',
+    'Addons with issues': '存在问题的 Addon',
+    'Webhook log matches': 'Webhook 日志匹配',
+    'Virtualization findings': '虚拟化发现项',
+    'VM images with issues': '存在问题的 VM 镜像',
+    'Network issues': '网络问题',
+    'Network log matches': '网络日志匹配',
+    'Nodes with issues': '存在问题的节点',
+    'Total Harvester nodes': 'Harvester 节点总数',
+    'Warning events': 'Warning 事件',
+    'Harvester log error lines': 'Harvester 日志 error 行',
+    Available: '可用',
+    Degraded: '退化',
+    Progressing: '进行中',
+    Version: '版本',
+    'NTP sync status': 'NTP 同步状态',
   },
 };
 
@@ -1814,8 +1976,7 @@ function renderReport(report) {
         </dl>
       </div>
       <div>
-        <h3>${escapeHtml(t('longhornInventory'))}</h3>
-        ${renderLonghornInventory(report.inventory?.longhorn)}
+        ${renderProductInventory(report)}
       </div>
       <div>
         <h3>${escapeHtml(t('largestFiles'))}</h3>
@@ -2054,9 +2215,11 @@ function renderEvidencePathButton(reportPath) {
 function renderArchiveMetadata(inventory = {}) {
   const metadata = inventory.metadata ?? {};
   const longhornVersion = inventory.longhorn?.version?.version;
+  const harvesterVersion = inventory.harvester?.version?.version;
   const rows = [
     ['Kubernetes', metadata.kubernetesversion],
     ['Longhorn', longhornVersion],
+    ['Harvester', harvesterVersion],
     [t('created'), metadata.bundlecreatedat],
     [t('issueDescription'), metadata.issuedescription],
   ].filter(([, value]) => value);
@@ -2064,6 +2227,20 @@ function renderArchiveMetadata(inventory = {}) {
   return rows
     .map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`)
     .join('');
+}
+
+function renderProductInventory(report) {
+  if (report.productType === 'harvester') {
+    return `
+      <h3>${escapeHtml(t('harvesterInventory'))}</h3>
+      ${renderHarvesterInventory(report.inventory?.harvester)}
+    `;
+  }
+
+  return `
+    <h3>${escapeHtml(t('longhornInventory'))}</h3>
+    ${renderLonghornInventory(report.inventory?.longhorn)}
+  `;
 }
 
 function renderLonghornInventory(inventory = {}) {
@@ -2078,6 +2255,40 @@ function renderLonghornInventory(inventory = {}) {
 
   if (!rows.length) {
     return `<p class="empty-report">${escapeHtml(t('noLonghornInventory'))}</p>`;
+  }
+
+  return `
+    <ul class="inventory-list">
+      ${rows
+        .map(
+          ([label, count, detail]) => `
+            <li>
+              <span>${escapeHtml(label)}</span>
+              <strong>${count}</strong>
+              <small>${escapeHtml(detail)}</small>
+            </li>
+          `,
+        )
+        .join('')}
+    </ul>
+  `;
+}
+
+function renderHarvesterInventory(inventory = {}) {
+  const rows = [
+    [t('nodes'), inventory.nodes?.total, inventory.nodes?.withIssues ? t('withIssues', { count: inventory.nodes.withIssues }) : t('ready')],
+    [t('pods'), inventory.pods?.total, inventory.pods?.withRestarts ? t('restarted', { count: inventory.pods.withRestarts }) : t('steady')],
+    [t('applications'), inventory.apps?.total, inventory.apps?.notDeployed ? t('notDeployed', { count: inventory.apps.notDeployed }) : t('deployed')],
+    [t('addons'), inventory.addons?.total, inventory.addons?.withIssues ? t('withIssues', { count: inventory.addons.withIssues }) : t('ready')],
+    [t('virtualization'), inventory.virtualization?.total, inventory.virtualization?.unavailable ? t('unavailable', { count: inventory.virtualization.unavailable }) : t('available')],
+    [t('vmImages'), inventory.vmImages?.total, inventory.vmImages?.withIssues ? t('failedItems', { count: inventory.vmImages.withIssues }) : t('imported')],
+    [t('networks'), inventory.networks?.total, inventory.networks?.withIssues ? t('withIssues', { count: inventory.networks.withIssues }) : t('ready')],
+    [t('events'), inventory.events?.total, inventory.events?.warnings ? t('warnings', { count: inventory.events.warnings }) : t('normal')],
+    [t('logs'), inventory.logs?.scannedFiles, inventory.logs?.matchedLines ? t('logMatches', { count: inventory.logs.matchedLines }) : t('quiet')],
+  ].filter(([, count]) => Number.isFinite(count));
+
+  if (!rows.length) {
+    return `<p class="empty-report">${escapeHtml(t('noHarvesterInventory'))}</p>`;
   }
 
   return `
@@ -2372,10 +2583,22 @@ function localizeFindingTitle(title) {
     return `节点 ${nodeCondition[1]} 存在 ${nodeCondition[2]} 问题`;
   }
 
+  const nodeNtp = text.match(/^Node (.+) NTP is (.+)$/);
+
+  if (nodeNtp) {
+    return `节点 ${nodeNtp[1]} NTP 状态为 ${nodeNtp[2]}`;
+  }
+
   const podPhase = text.match(/^Pod (.+) is (.+)$/);
 
   if (podPhase) {
     return `Pod ${podPhase[1]} 状态为 ${podPhase[2]}`;
+  }
+
+  const stackReady = text.match(/^(.+) is not fully ready$/);
+
+  if (stackReady) {
+    return `${stackReady[1]} 未完全就绪`;
   }
 
   const alert = text.match(/^(.+) is firing$/);

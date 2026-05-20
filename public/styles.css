@@ -1158,6 +1158,17 @@ td {
   font-weight: 700;
 }
 
+th:nth-child(3),
+th:nth-child(4),
+th:nth-child(7),
+th:nth-child(8),
+td:nth-child(3),
+td:nth-child(4),
+td:nth-child(7),
+td:nth-child(8) {
+  white-space: nowrap;
+}
+
 .muted {
   color: var(--muted);
 }
@@ -1171,8 +1182,12 @@ td {
   color: var(--green-dark);
   font-size: 0.78rem;
   font-weight: 800;
+  justify-content: center;
+  line-height: 1;
+  min-width: 64px;
   padding: 4px 10px;
   text-transform: capitalize;
+  white-space: nowrap;
 }
 
 .analysis-queued,
@@ -1198,14 +1213,20 @@ td {
 
 .report-button,
 .delete-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-height: 34px;
+  min-width: 66px;
   cursor: pointer;
   border: 1px solid rgba(11, 127, 79, 0.28);
   border-radius: 8px;
   background: #ffffff;
   color: var(--green-dark);
   font-weight: 800;
+  line-height: 1;
   padding: 0 12px;
+  white-space: nowrap;
 }
 
 .delete-button {

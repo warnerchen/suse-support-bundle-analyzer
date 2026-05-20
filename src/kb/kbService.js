@@ -25,6 +25,18 @@ const GROUP_QUERY_HINTS = {
     'longhorn prometheus alert monitoring warning volume alert runbook',
   'longhorn-collection-gaps':
     'longhorn support bundle collect pod logs bundleGenerationError create support bundle troubleshooting',
+  'harvester-control-plane-health':
+    'harvester webhook api control plane pod restart addon catalog app admission validator 502 bad gateway',
+  'harvester-virtualization-readiness':
+    'harvester kubevirt cdi virtual machine scheduling live migration node selector vm image import upload',
+  'harvester-network-health':
+    'harvester vm network vlan multus whereabouts bridge gro gso offload ethtool throughput connectivity',
+  'harvester-node-health':
+    'harvester node ready pressure ntp sync etcd voter maintenance scheduling taint label',
+  'harvester-platform-events-and-logs':
+    'harvester warning event platform log error kube-system harvester-system troubleshooting',
+  'harvester-collection-gaps':
+    'harvester support bundle collect pod logs bundleGenerationError kubevirt cdi api resources',
 };
 
 export class KbService {

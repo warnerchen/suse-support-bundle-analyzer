@@ -10,17 +10,15 @@ Web application for Technical Support Engineers to upload SUSE product support b
 - Create and resume background analysis jobs automatically.
 - Safely list, validate, and extract common archive formats.
 - Generate a safe file index and largest-file summary for each bundle.
-- Run Longhorn inventory checks, finding correlation, and grouped diagnostics.
-- Detect Longhorn component version from settings, labels, annotations, and images.
+- Run Longhorn and Harvester inventory checks, finding correlation, and grouped diagnostics.
+- Detect Longhorn and Harvester component versions from product resources, labels, annotations, and images.
 - Preview raw evidence files from findings, largest files, and the file index.
 - Open log evidence directly around the matched line with highlighted context.
 - Import KB content from URLs or batch Markdown uploads.
 - Preview KB imports with quality checks before indexing.
 - Manage imported KB sources from the UI.
-- Store a local KB vector index and show related KB articles on Longhorn finding groups.
+- Store a local KB vector index and show related KB articles on product finding groups.
 - Delete bundles together with related jobs, reports, and extracted work files.
-
-Longhorn analysis is implemented. Harvester can be selected and stored today, but Harvester-specific finding rules are not implemented yet.
 
 ## Requirements
 
@@ -128,6 +126,7 @@ The app is intentionally small and modular:
 - `src/repositories/*`: JSON-backed metadata repositories.
 - `src/analysis/archiveAnalyzer.js`: archive validation, safe extraction, file index generation, evidence file preview.
 - `src/analysis/longhornAnalyzer.js`: Longhorn inventory, version detection, findings, finding groups, log evidence references.
+- `src/analysis/harvesterAnalyzer.js`: Harvester inventory, version detection, findings, finding groups, log evidence references.
 - `src/kb/kbService.js`: URL/Markdown KB preview, quality checks, import, source deletion, report enrichment.
 - `src/kb/kbStore.js`: local KB document/chunk/vector persistence and search.
 - `src/kb/localEmbeddingProvider.js`: deterministic local hash vectors for offline testing.
@@ -147,6 +146,16 @@ The Longhorn analyzer currently extracts:
 
 The `issuedescription` field in `metadata.yaml` is displayed as `Issue Description`. It is bundle-provided text, not product detection.
 
+## Harvester Analysis
+
+The Harvester analyzer currently extracts:
+
+- Bundle metadata such as Kubernetes version, creation time, and support bundle issue description.
+- Harvester version from the installed Harvester app chart, pod labels/images, addon specs, and available `Version` resources.
+- Inventory counts for cluster nodes, harvester-system pods, catalog apps, addons, KubeVirt/CDI, VM images, VLAN statuses, events, and scanned logs.
+- Findings for collection gaps, node condition/NTP issues, Harvester pod restarts, app/addon readiness, KubeVirt/CDI readiness, VM image import failures, VLAN readiness, warning events, and selected Harvester/KubeVirt log patterns.
+- Correlated finding groups with impact, recommended checks, affected metrics, evidence, and related KB matches.
+
 ## KB Index
 
 KB sources can be imported from:
@@ -161,7 +170,7 @@ Before import, the UI can preview documents and show quality status:
 - `warning`: importable but worth reviewing, for example short content or missing title.
 - `blocked`: not importable, for example dynamic shell pages without readable article text.
 
-Imported documents are normalized, chunked, embedded with `local-hash-v1`, and stored in `kb-index.json`. Reports are enriched by searching the KB index for each Longhorn finding group.
+Imported documents are normalized, chunked, embedded with `local-hash-v1`, and stored in `kb-index.json`. Reports are enriched by searching the KB index for each product finding group.
 
 ## API
 
@@ -217,9 +226,9 @@ Returns one analysis job.
 
 ### `GET /api/analysis-jobs/{id}/report`
 
-Returns the generated analysis report for a completed analysis job. If KB data has been imported, Longhorn finding groups include related KB matches.
+Returns the generated analysis report for a completed analysis job. If KB data has been imported, finding groups include related KB matches.
 
-For older reports, the server may enrich missing derived fields such as Longhorn version from the retained extracted files.
+For older reports, the server may enrich missing derived fields such as product version from the retained extracted files.
 
 ### `GET /api/analysis-jobs/{id}/files?path={reportPath}`
 
@@ -318,6 +327,7 @@ Useful checks before committing:
 node --check src/server.js
 node --check src/analysis/archiveAnalyzer.js
 node --check src/analysis/longhornAnalyzer.js
+node --check src/analysis/harvesterAnalyzer.js
 node --check public/app.js
 git diff --check
 ```
@@ -335,7 +345,7 @@ This project does not yet include authentication, authorization, multi-user tena
 
 ## Suggested Next Work
 
-- Add Harvester-specific inventory and finding rules.
+- Add deeper Harvester VM workload analysis from virtual machine and VMI resources when those resources are present in support bundles.
 - Add a pluggable semantic embedding provider.
 - Add an external vector database backend such as Qdrant for KB chunks.
 - Move metadata from JSON files to PostgreSQL when multiple app instances or workers are introduced.
