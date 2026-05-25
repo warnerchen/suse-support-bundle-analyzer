@@ -7,6 +7,7 @@ import { chunkKbDocument, extractDocumentLinks, normalizeKbDocument } from './kb
 
 const SUPPORTED_MARKDOWN_SUFFIXES = ['.md', '.markdown'];
 const REMOTE_DOCUMENT_MIN_CHARS = 120;
+const SUPPORTED_PRODUCT_TYPES = new Set(['longhorn', 'harvester']);
 
 const GROUP_QUERY_HINTS = {
   'longhorn-manager-stability':
@@ -29,6 +30,8 @@ const GROUP_QUERY_HINTS = {
     'harvester webhook api control plane pod restart addon catalog app admission validator 502 bad gateway',
   'harvester-virtualization-readiness':
     'harvester kubevirt cdi virtual machine scheduling live migration node selector vm image import upload',
+  'harvester-vm-workload-health':
+    'harvester virtual machine vmi vm scheduling unschedulable pending runStrategy printableStatus live migration virt-launcher node selector taint',
   'harvester-network-health':
     'harvester vm network vlan multus whereabouts bridge gro gso offload ethtool throughput connectivity',
   'harvester-node-health':
@@ -237,6 +240,7 @@ export class KbService {
 
   async #prepareUrlImport(urls, { expandLinks = true, productType = null } = {}) {
     const requestedUrls = sanitizeUrls(urls);
+    const normalizedProductType = normalizeImportProductType(productType);
 
     if (!requestedUrls.length) {
       throw validationError('Provide at least one KB URL to import.');
@@ -271,7 +275,7 @@ export class KbService {
           content: page.content,
           sourceUri: page.url,
           contentType: page.contentType,
-          productType,
+          productType: normalizedProductType,
         });
 
         documents.push({
@@ -295,6 +299,7 @@ export class KbService {
 
   async #prepareFileImport(files, { productType = null } = {}) {
     const fileList = Array.isArray(files) ? files : [files].filter(Boolean);
+    const normalizedProductType = normalizeImportProductType(productType);
 
     if (!fileList.length) {
       throw validationError('Select at least one Markdown file to import.');
@@ -326,7 +331,7 @@ export class KbService {
           content,
           sourceUri: `uploaded://${encodeURIComponent(name)}`,
           contentType: file.type || 'text/markdown',
-          productType,
+          productType: normalizedProductType,
         });
 
         documents.push({
@@ -384,6 +389,16 @@ function shouldExpandLinks(sourceUrl, links, expandLinks) {
 function isMarkdownFilename(filename) {
   const lower = filename.toLowerCase();
   return SUPPORTED_MARKDOWN_SUFFIXES.some((suffix) => lower.endsWith(suffix));
+}
+
+function normalizeImportProductType(productType) {
+  const normalized = String(productType ?? '').trim().toLowerCase();
+
+  if (SUPPORTED_PRODUCT_TYPES.has(normalized)) {
+    return normalized;
+  }
+
+  throw validationError('Choose a supported product before importing KB sources.');
 }
 
 function validateRemoteDocument(document) {

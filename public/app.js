@@ -37,10 +37,12 @@ const kbFileName = document.querySelector('#kbFileName');
 const kbFileImportButton = document.querySelector('#kbFileImportButton');
 const kbExpandLinks = document.querySelector('#kbExpandLinks');
 const kbProductType = document.querySelector('#kbProductType');
+const kbProductPicker = document.querySelector('#kbProductPicker');
 const kbMessage = document.querySelector('#kbMessage');
 const kbStats = document.querySelector('#kbStats');
 const kbPreviewPanel = document.querySelector('#kbPreviewPanel');
 const kbSourceFilter = document.querySelector('#kbSourceFilter');
+const kbSourceFilterPicker = document.querySelector('#kbSourceFilterPicker');
 const kbSourceList = document.querySelector('#kbSourceList');
 
 const DEFAULT_LANGUAGE = 'en';
@@ -68,6 +70,7 @@ const TRANSLATIONS = {
     uploadTitle: 'Upload Support Bundle',
     limitLabel: ({ size }) => `Limit ${size}`,
     product: 'Product',
+    selectProduct: 'Select product',
     chooseBundleArchive: 'Choose bundle archive',
     noFileSelected: 'No file selected',
     upload: 'Upload',
@@ -189,6 +192,7 @@ const TRANSLATIONS = {
     unableToLoadEvidenceFile: 'Unable to load evidence file.',
     deleteFailed: 'Delete failed.',
     chooseProduct: 'Choose Longhorn or Harvester.',
+    chooseKbProduct: 'Choose a product before importing KB sources.',
     selectBundleArchive: 'Select a support bundle archive.',
     fileTooLarge: ({ size }) => `File is larger than ${size}.`,
     uploading: 'Uploading',
@@ -231,6 +235,9 @@ const TRANSLATIONS = {
     pods: 'Pods',
     applications: 'Apps',
     addons: 'Addons',
+    vmWorkloads: 'VMs',
+    vmInstances: 'VMIs',
+    migrations: 'Migrations',
     vmImages: 'VM Images',
     networks: 'Networks',
     virtualization: 'Virtualization',
@@ -258,6 +265,8 @@ const TRANSLATIONS = {
     failedItems: ({ count }) => `${count} failed`,
     notReady: ({ count }) => `${count} not ready`,
     unavailable: ({ count }) => `${count} unavailable`,
+    notRunning: ({ count }) => `${count} not running`,
+    failedMigrations: ({ count }) => `${count} failed`,
     logMatches: ({ count }) => `${count} matches`,
   },
   'zh-CN': {
@@ -274,6 +283,7 @@ const TRANSLATIONS = {
     uploadTitle: '上传 Support Bundle',
     limitLabel: ({ size }) => `限制 ${size}`,
     product: '产品',
+    selectProduct: '选择产品',
     chooseBundleArchive: '选择 Bundle 压缩包',
     noFileSelected: '未选择文件',
     upload: '上传',
@@ -395,6 +405,7 @@ const TRANSLATIONS = {
     unableToLoadEvidenceFile: '无法加载证据文件。',
     deleteFailed: '删除失败。',
     chooseProduct: '请选择 Longhorn 或 Harvester。',
+    chooseKbProduct: '导入 KB 来源前请选择产品。',
     selectBundleArchive: '请选择 support bundle 压缩包。',
     fileTooLarge: ({ size }) => `文件大于 ${size}。`,
     uploading: '正在上传',
@@ -437,6 +448,9 @@ const TRANSLATIONS = {
     pods: 'Pod',
     applications: '应用',
     addons: 'Addon',
+    vmWorkloads: '虚拟机',
+    vmInstances: 'VMI',
+    migrations: '迁移',
     vmImages: 'VM 镜像',
     networks: '网络',
     virtualization: '虚拟化',
@@ -464,6 +478,8 @@ const TRANSLATIONS = {
     failedItems: ({ count }) => `${count} 个失败`,
     notReady: ({ count }) => `${count} 个未就绪`,
     unavailable: ({ count }) => `${count} 个不可用`,
+    notRunning: ({ count }) => `${count} 个未运行`,
+    failedMigrations: ({ count }) => `${count} 个失败`,
     logMatches: ({ count }) => `${count} 个匹配`,
   },
 };
@@ -523,6 +539,7 @@ const CATEGORY_LABELS = {
     'Harvester Pod': 'Harvester Pod',
     'Harvester App': 'Harvester 应用',
     'Harvester Addon': 'Harvester Addon',
+    'Harvester VM': 'Harvester 虚拟机',
     'Harvester Image': 'Harvester 镜像',
     'Harvester Network': 'Harvester 网络',
     Virtualization: '虚拟化',
@@ -585,6 +602,18 @@ const FINDING_TEXT = {
     'harvester-vm-images-not-imported': {
       title: 'VM 镜像未完全导入',
       description: '一个或多个 Harvester VM 镜像不是 Imported=True，或报告了导入失败次数。',
+    },
+    'harvester-vms-not-ready': {
+      title: '虚拟机未就绪',
+      description: '一个或多个 KubeVirt VirtualMachine 资源没有处于预期的运行或就绪状态。',
+    },
+    'harvester-vmis-not-running': {
+      title: 'VirtualMachineInstance 未运行',
+      description: '一个或多个 KubeVirt VirtualMachineInstance 资源不是 Running 且 Ready=True。',
+    },
+    'harvester-vm-migrations-failed': {
+      title: '虚拟机迁移失败',
+      description: '一个或多个 KubeVirt VirtualMachineInstanceMigration 资源失败或卡在调度阶段。',
     },
     'harvester-vlan-status-not-ready': {
       title: 'VLAN 状态未就绪',
@@ -718,6 +747,16 @@ const GROUP_TEXT = {
         '对调度消息，检查节点选择器、taint、label、维护状态或 cordon 状态。',
       ],
     },
+    'harvester-vm-workload-health': {
+      title: 'Harvester 虚拟机工作负载需要关注',
+      description: 'VirtualMachine、VirtualMachineInstance 和迁移资源可以说明业务 VM 是否真实运行、可调度并且可迁移。',
+      impact: '即使 Harvester 控制面可用，受影响 VM 也可能停留在 stopped、pending、unschedulable，或在线迁移失败。',
+      recommendedChecks: [
+        '一起打开 VM 和 VMI YAML，对比期望运行状态、printableStatus、phase、nodeName 和 Ready 条件。',
+        '对 Pending 或 Unschedulable 的 VM，检查 node selector、taint、label、维护模式、cordon 状态和可用资源。',
+        '对迁移失败，结合 VMIM 资源以及 virt-controller、virt-handler 日志查看迁移时间点附近的错误。',
+      ],
+    },
     'harvester-network-health': {
       title: '需要检查 Harvester 网络健康状态',
       description: 'VLAN status 和网络相关日志可以解释 VM 连接、bridge、multus 或 offload 相关症状。',
@@ -792,6 +831,10 @@ const EVIDENCE_LABELS = {
     'Webhook log matches': 'Webhook 日志匹配',
     'Virtualization findings': '虚拟化发现项',
     'VM images with issues': '存在问题的 VM 镜像',
+    'VMs with issues': '存在问题的虚拟机',
+    'VMIs not running': '未运行的 VMI',
+    'Failed migrations': '失败迁移',
+    'Scheduling log matches': '调度日志匹配',
     'Network issues': '网络问题',
     'Network log matches': '网络日志匹配',
     'Nodes with issues': '存在问题的节点',
@@ -904,13 +947,20 @@ function bindEvents() {
     if (!languageControl.contains(event.target)) {
       closeLanguageMenu();
     }
+
+    for (const picker of productPickers()) {
+      if (!picker.contains(event.target)) {
+        closeProductPicker(picker);
+      }
+    }
   });
 
+  bindProductPicker(productOptions);
+  bindProductPicker(kbProductPicker);
+  bindProductPicker(kbSourceFilterPicker);
+
   productOptions.addEventListener('change', () => {
-    for (const segment of productOptions.querySelectorAll('.segment')) {
-      const input = segment.querySelector('input');
-      segment.classList.toggle('selected', input.checked);
-    }
+    setFormMessage('');
   });
 
   fileInput.addEventListener('change', () => {
@@ -1031,6 +1081,14 @@ function bindEvents() {
       return;
     }
 
+    const openProductPicker = productPickers().find((picker) => !productPickerMenu(picker).hidden);
+
+    if (event.key === 'Escape' && openProductPicker) {
+      closeProductPicker(openProductPicker);
+      productPickerButton(openProductPicker).focus();
+      return;
+    }
+
     if (event.key === 'Escape' && !evidenceDrawer.hidden) {
       closeEvidenceDrawer();
       return;
@@ -1073,6 +1131,10 @@ function toggleLanguageMenu() {
 }
 
 function openLanguageMenu() {
+  for (const picker of productPickers()) {
+    closeProductPicker(picker);
+  }
+
   languageMenu.hidden = false;
   syncLanguageControl();
 }
@@ -1114,6 +1176,187 @@ function focusAdjacentLanguageOption(offset) {
   options[nextIndex].focus();
 }
 
+function bindProductPicker(picker) {
+  const button = productPickerButton(picker);
+  const menu = productPickerMenu(picker);
+
+  button.addEventListener('click', (event) => {
+    event.stopPropagation();
+    toggleProductPicker(picker);
+  });
+
+  button.addEventListener('keydown', (event) => {
+    if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      openProductPicker(picker);
+      focusProductOption(picker, productPickerInput(picker).value);
+    }
+  });
+
+  menu.addEventListener('click', (event) => {
+    const option = event.target.closest('[data-product-value]');
+
+    if (!option) {
+      return;
+    }
+
+    setProductPickerValue(picker, option.dataset.productValue);
+    closeProductPicker(picker);
+    button.focus();
+  });
+
+  menu.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeProductPicker(picker);
+      button.focus();
+      return;
+    }
+
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      focusAdjacentProductOption(picker, event.key === 'ArrowDown' ? 1 : -1);
+      return;
+    }
+
+    if (event.key === 'Home' || event.key === 'End') {
+      event.preventDefault();
+      const options = productPickerOptions(picker);
+      const option = event.key === 'Home' ? options[0] : options.at(-1);
+      option?.focus();
+      return;
+    }
+
+    if (event.key === 'Enter' || event.key === ' ') {
+      const option = document.activeElement?.closest?.('[data-product-value]');
+
+      if (option) {
+        event.preventDefault();
+        setProductPickerValue(picker, option.dataset.productValue);
+        closeProductPicker(picker);
+        button.focus();
+      }
+    }
+  });
+
+  syncProductPicker(picker);
+}
+
+function productPickers() {
+  return [...document.querySelectorAll('[data-product-picker]')];
+}
+
+function productPickerButton(picker) {
+  return picker.querySelector('[data-product-picker-button]');
+}
+
+function productPickerMenu(picker) {
+  return picker.querySelector('[role="listbox"]');
+}
+
+function productPickerInput(picker) {
+  return picker.querySelector('input[type="hidden"]');
+}
+
+function productPickerOptions(picker) {
+  return [...picker.querySelectorAll('[data-product-value]')];
+}
+
+function productPickerAllowsEmptyOption(picker) {
+  return picker.dataset.emptyIsOption === 'true';
+}
+
+function productPickerOptionLabel(option) {
+  const labelKey = option.dataset.productLabelKey;
+
+  if (labelKey) {
+    return t(labelKey);
+  }
+
+  return productLabel(option.dataset.productValue);
+}
+
+function toggleProductPicker(picker) {
+  if (productPickerMenu(picker).hidden) {
+    openProductPicker(picker);
+  } else {
+    closeProductPicker(picker);
+  }
+}
+
+function openProductPicker(picker) {
+  for (const otherPicker of productPickers()) {
+    if (otherPicker !== picker) {
+      closeProductPicker(otherPicker);
+    }
+  }
+
+  closeLanguageMenu();
+  productPickerMenu(picker).hidden = false;
+  syncProductPicker(picker);
+}
+
+function closeProductPicker(picker) {
+  productPickerMenu(picker).hidden = true;
+  syncProductPicker(picker);
+}
+
+function setProductPickerValue(picker, value) {
+  const input = productPickerInput(picker);
+
+  if (input.value === value) {
+    syncProductPicker(picker);
+    return;
+  }
+
+  input.value = value;
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+  syncProductPicker(picker);
+}
+
+function syncProductPicker(picker) {
+  const input = productPickerInput(picker);
+  const button = productPickerButton(picker);
+  const menu = productPickerMenu(picker);
+  const value = input.value;
+  const isOpen = !menu.hidden;
+  const label = picker.querySelector('[data-product-picker-label]');
+  const options = productPickerOptions(picker);
+  const selectedOption = options.find((option) => option.dataset.productValue === value);
+  const hasSelection = Boolean(selectedOption) && (Boolean(value) || productPickerAllowsEmptyOption(picker));
+
+  picker.classList.toggle('open', isOpen);
+  button.classList.toggle('is-placeholder', !hasSelection);
+  button.setAttribute('aria-expanded', String(isOpen));
+  label.textContent = hasSelection ? productPickerOptionLabel(selectedOption) : t('selectProduct');
+
+  for (const option of options) {
+    const selected = option.dataset.productValue === value;
+    option.setAttribute('aria-selected', String(selected));
+    option.tabIndex = isOpen && (selected || (!hasSelection && option === options[0])) ? 0 : -1;
+  }
+}
+
+function focusProductOption(picker, value) {
+  const options = productPickerOptions(picker);
+  const option = options.find((item) => item.dataset.productValue === value) ?? options[0];
+  option?.focus();
+}
+
+function focusAdjacentProductOption(picker, offset) {
+  const options = productPickerOptions(picker);
+
+  if (!options.length) {
+    return;
+  }
+
+  const activeIndex = options.indexOf(document.activeElement);
+  const selectedIndex = options.findIndex((option) => option.dataset.productValue === productPickerInput(picker).value);
+  const currentIndex = activeIndex >= 0 ? activeIndex : Math.max(selectedIndex, 0);
+  const nextIndex = (currentIndex + offset + options.length) % options.length;
+  options[nextIndex].focus();
+}
+
 function t(key, params = {}) {
   const value = TRANSLATIONS[currentLanguage]?.[key] ?? TRANSLATIONS[DEFAULT_LANGUAGE][key] ?? key;
 
@@ -1141,6 +1384,9 @@ function applyLanguage() {
   }
 
   syncLanguageControl();
+  for (const picker of productPickers()) {
+    syncProductPicker(picker);
+  }
   renderUploadLimit();
   setApiStatus(apiStatusKey, apiStatusState);
   updateSelectedFile({ clearFeedback: false });
@@ -1226,8 +1472,7 @@ async function uploadBundle(event) {
     setProgress(100);
     setFormMessage(t('uploadQueued', { filename: payload.bundle.originalFilename }), 'success');
     form.reset();
-    productOptions.querySelector('input[value="longhorn"]').checked = true;
-    productOptions.dispatchEvent(new Event('change'));
+    syncProductPicker(productOptions);
     updateSelectedFile();
     setProgress(100);
     await refreshDashboard();
@@ -1259,10 +1504,16 @@ async function loadKbStatus() {
 async function previewKbUrls(event) {
   event.preventDefault();
 
+  const productType = kbProductType.value;
   const urls = kbUrlInput.value
     .split(/\s+/)
     .map((value) => value.trim())
     .filter(Boolean);
+
+  if (!productType) {
+    setKbMessage(t('chooseKbProduct'), 'error');
+    return;
+  }
 
   if (!urls.length) {
     setKbMessage(t('enterKbUrl'), 'error');
@@ -1278,7 +1529,7 @@ async function previewKbUrls(event) {
       type: 'urls',
       urls,
       expandLinks: kbExpandLinks.checked,
-      productType: kbProductType.value || null,
+      productType,
     };
     const response = await fetch('/api/kb/preview-url', {
       method: 'POST',
@@ -1307,7 +1558,13 @@ async function previewKbUrls(event) {
 async function previewKbFiles(event) {
   event.preventDefault();
 
+  const productType = kbProductType.value;
   const files = [...(kbFileInput.files ?? [])];
+
+  if (!productType) {
+    setKbMessage(t('chooseKbProduct'), 'error');
+    return;
+  }
 
   if (!files.length) {
     setKbMessage(t('selectMarkdownFile'), 'error');
@@ -1326,7 +1583,7 @@ async function previewKbFiles(event) {
   setKbMessage(t('previewingMarkdownFiles'));
 
   const formData = new FormData();
-  formData.append('productType', kbProductType.value || '');
+  formData.append('productType', productType);
 
   for (const file of files) {
     formData.append('kbFiles', file);
@@ -1347,7 +1604,7 @@ async function previewKbFiles(event) {
       ? {
           type: 'files',
           files,
-          productType: kbProductType.value || null,
+          productType,
         }
       : null;
     renderKbPreview(payload.preview);
@@ -2281,6 +2538,9 @@ function renderHarvesterInventory(inventory = {}) {
     [t('applications'), inventory.apps?.total, inventory.apps?.notDeployed ? t('notDeployed', { count: inventory.apps.notDeployed }) : t('deployed')],
     [t('addons'), inventory.addons?.total, inventory.addons?.withIssues ? t('withIssues', { count: inventory.addons.withIssues }) : t('ready')],
     [t('virtualization'), inventory.virtualization?.total, inventory.virtualization?.unavailable ? t('unavailable', { count: inventory.virtualization.unavailable }) : t('available')],
+    [t('vmWorkloads'), inventory.workloads?.vms, inventory.workloads?.vmIssues ? t('withIssues', { count: inventory.workloads.vmIssues }) : t('ready')],
+    [t('vmInstances'), inventory.workloads?.vmis, inventory.workloads?.vmisNotRunning ? t('notRunning', { count: inventory.workloads.vmisNotRunning }) : t('running')],
+    [t('migrations'), inventory.workloads?.migrations, inventory.workloads?.migrationsFailed ? t('failedMigrations', { count: inventory.workloads.migrationsFailed }) : t('steady')],
     [t('vmImages'), inventory.vmImages?.total, inventory.vmImages?.withIssues ? t('failedItems', { count: inventory.vmImages.withIssues }) : t('imported')],
     [t('networks'), inventory.networks?.total, inventory.networks?.withIssues ? t('withIssues', { count: inventory.networks.withIssues }) : t('ready')],
     [t('events'), inventory.events?.total, inventory.events?.warnings ? t('warnings', { count: inventory.events.warnings }) : t('normal')],
@@ -2593,6 +2853,18 @@ function localizeFindingTitle(title) {
 
   if (podPhase) {
     return `Pod ${podPhase[1]} 状态为 ${podPhase[2]}`;
+  }
+
+  const vmPhase = text.match(/^VM (.+) is (.+)$/);
+
+  if (vmPhase) {
+    return `虚拟机 ${vmPhase[1]} 状态为 ${vmPhase[2]}`;
+  }
+
+  const vmiPhase = text.match(/^VMI (.+) is (.+)$/);
+
+  if (vmiPhase) {
+    return `VMI ${vmiPhase[1]} 状态为 ${vmiPhase[2]}`;
   }
 
   const stackReady = text.match(/^(.+) is not fully ready$/);

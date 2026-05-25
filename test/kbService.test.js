@@ -86,7 +86,9 @@ test('imports KB URLs and searches the local vector index', async () => {
     });
 
     await service.ensureReady();
-    const result = await service.importFromUrls(['https://longhorn.io/kb/']);
+    const result = await service.importFromUrls(['https://longhorn.io/kb/'], {
+      productType: 'longhorn',
+    });
 
     assert.equal(result.documentsImported, 2);
     assert.ok(result.chunksIndexed >= 2);
@@ -139,6 +141,27 @@ test('previews KB URLs without mutating the local vector index', async () => {
     assert.equal(preview.documents[0].chunkCount, 1);
     assert.equal(stats.documentCount, 0);
     assert.equal(stats.chunkCount, 0);
+  } finally {
+    await fs.rm(storageDir, { recursive: true, force: true });
+  }
+});
+
+test('requires a product when preparing KB imports', async () => {
+  const storageDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kb-product-required-'));
+
+  try {
+    const service = new KbService({
+      store: new KbStore({
+        storageDir,
+        embeddingProvider: new LocalEmbeddingProvider({ dimensions: 64 }),
+      }),
+    });
+
+    await service.ensureReady();
+    await assert.rejects(
+      () => service.previewFromUrls(['https://harvesterhci.io/kb/'], { expandLinks: false }),
+      /Choose a supported product/,
+    );
   } finally {
     await fs.rm(storageDir, { recursive: true, force: true });
   }

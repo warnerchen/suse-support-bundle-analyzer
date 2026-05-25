@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SUSE Support Bundle Analyzer</title>
-    <link rel="stylesheet" href="/styles.css?v=20260521-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260525-5" />
   </head>
   <body>
     <div class="app-shell">
@@ -63,15 +63,28 @@
           <form id="uploadForm" class="upload-form">
             <fieldset>
               <legend data-i18n="product">Product</legend>
-              <div class="segmented-control" id="productOptions">
-                <label class="segment selected">
-                  <input type="radio" name="productType" value="longhorn" checked />
-                  <span>Longhorn</span>
-                </label>
-                <label class="segment">
-                  <input type="radio" name="productType" value="harvester" />
-                  <span>Harvester</span>
-                </label>
+              <div class="product-picker" id="productOptions" data-product-picker>
+                <input id="bundleProductType" name="productType" type="hidden" required />
+                <button
+                  class="language-button product-picker-button"
+                  type="button"
+                  aria-haspopup="listbox"
+                  aria-expanded="false"
+                  aria-label="Product"
+                  data-i18n-aria-label="product"
+                  data-product-picker-button
+                >
+                  <span data-product-picker-label data-i18n="selectProduct">Select product</span>
+                  <span class="language-chevron" aria-hidden="true"></span>
+                </button>
+                <div class="language-menu product-picker-menu" role="listbox" aria-label="Product" data-i18n-aria-label="product" hidden>
+                  <button class="language-option" type="button" role="option" data-product-value="longhorn" aria-selected="false">
+                    Longhorn
+                  </button>
+                  <button class="language-option" type="button" role="option" data-product-value="harvester" aria-selected="false">
+                    Harvester
+                  </button>
+                </div>
               </div>
             </fieldset>
 
@@ -159,14 +172,32 @@
           <div class="kb-layout">
             <div class="kb-import-stack">
               <div class="kb-import-options">
-                <label class="kb-product-scope" for="kbProductType">
+                <div class="kb-product-scope">
                   <span data-i18n="productScope">Product Scope</span>
-                  <select id="kbProductType">
-                    <option value="" data-i18n="autoDetect">Auto detect</option>
-                    <option value="longhorn">Longhorn</option>
-                    <option value="harvester">Harvester</option>
-                  </select>
-                </label>
+                  <div class="product-picker" id="kbProductPicker" data-product-picker>
+                    <input id="kbProductType" type="hidden" required />
+                    <button
+                      class="language-button product-picker-button"
+                      type="button"
+                      aria-haspopup="listbox"
+                      aria-expanded="false"
+                      aria-label="Product Scope"
+                      data-i18n-aria-label="productScope"
+                      data-product-picker-button
+                    >
+                      <span data-product-picker-label data-i18n="selectProduct">Select product</span>
+                      <span class="language-chevron" aria-hidden="true"></span>
+                    </button>
+                    <div class="language-menu product-picker-menu" role="listbox" aria-label="Product Scope" data-i18n-aria-label="productScope" hidden>
+                      <button class="language-option" type="button" role="option" data-product-value="longhorn" aria-selected="false">
+                        Longhorn
+                      </button>
+                      <button class="language-option" type="button" role="option" data-product-value="harvester" aria-selected="false">
+                        Harvester
+                      </button>
+                    </div>
+                  </div>
+                </div>
                 <div class="kb-expand-option">
                   <label class="kb-checkbox">
                     <input id="kbExpandLinks" type="checkbox" checked />
@@ -220,12 +251,35 @@
               </div>
               <div class="kb-sources-header">
                 <div class="kb-field-label" data-i18n="sources">Sources</div>
-                <select id="kbSourceFilter" aria-label="Filter KB sources by product" data-i18n-aria-label="filterKbSources">
-                  <option value="" data-i18n="allProducts">All products</option>
-                  <option value="longhorn">Longhorn</option>
-                  <option value="harvester">Harvester</option>
-                  <option value="unknown" data-i18n="unknown">Unknown</option>
-                </select>
+                <div class="product-picker source-filter-picker" id="kbSourceFilterPicker" data-product-picker data-empty-is-option="true">
+                  <input id="kbSourceFilter" type="hidden" value="" />
+                  <button
+                    class="language-button product-picker-button"
+                    type="button"
+                    aria-haspopup="listbox"
+                    aria-expanded="false"
+                    aria-label="Filter KB sources by product"
+                    data-i18n-aria-label="filterKbSources"
+                    data-product-picker-button
+                  >
+                    <span data-product-picker-label data-i18n="allProducts">All products</span>
+                    <span class="language-chevron" aria-hidden="true"></span>
+                  </button>
+                  <div class="language-menu product-picker-menu" role="listbox" aria-label="Filter KB sources by product" data-i18n-aria-label="filterKbSources" hidden>
+                    <button class="language-option" type="button" role="option" data-product-value="" data-product-label-key="allProducts" data-i18n="allProducts" aria-selected="true">
+                      All products
+                    </button>
+                    <button class="language-option" type="button" role="option" data-product-value="longhorn" aria-selected="false">
+                      Longhorn
+                    </button>
+                    <button class="language-option" type="button" role="option" data-product-value="harvester" aria-selected="false">
+                      Harvester
+                    </button>
+                    <button class="language-option" type="button" role="option" data-product-value="unknown" data-product-label-key="unknown" data-i18n="unknown" aria-selected="false">
+                      Unknown
+                    </button>
+                  </div>
+                </div>
               </div>
               <div class="kb-source-list" id="kbSourceList">
                 <p class="empty-report" data-i18n="loadingKbSources">Loading KB sources</p>
@@ -296,6 +350,6 @@
       </aside>
     </div>
 
-    <script src="/app.js?v=20260520-1" type="module"></script>
+    <script src="/app.js?v=20260525-5" type="module"></script>
   </body>
 </html>

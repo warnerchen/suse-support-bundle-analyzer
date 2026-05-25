@@ -160,6 +160,79 @@ test('builds Harvester findings from support bundle files', async () => {
     );
     await writeFixtureFile(
       extractDir,
+      'bundle/yamls/namespaced/default/kubevirt.io/v1/virtualmachines.yaml',
+      [
+        'apiVersion: v1',
+        'items:',
+        '- apiVersion: kubevirt.io/v1',
+        '  kind: VirtualMachine',
+        '  metadata:',
+        '    name: vm-a',
+        '    namespace: default',
+        '  spec:',
+        '    running: true',
+        '    template:',
+        '      spec:',
+        '        nodeSelector:',
+        '          kubernetes.io/hostname: node-b',
+        '  status:',
+        '    conditions:',
+        '    - message: 0/3 nodes are available: node selector did not match',
+        '      reason: Unschedulable',
+        '      status: "False"',
+        '      type: Ready',
+        '    created: false',
+        '    printableStatus: Unschedulable',
+      ].join('\n'),
+    );
+    await writeFixtureFile(
+      extractDir,
+      'bundle/yamls/namespaced/default/kubevirt.io/v1/virtualmachineinstances.yaml',
+      [
+        'apiVersion: v1',
+        'items:',
+        '- apiVersion: kubevirt.io/v1',
+        '  kind: VirtualMachineInstance',
+        '  metadata:',
+        '    name: vm-a',
+        '    namespace: default',
+        '  status:',
+        '    conditions:',
+        '    - message: 0/3 nodes are available: node selector did not match',
+        '      reason: Unschedulable',
+        '      status: "False"',
+        '      type: Ready',
+        '    nodeName: node-a',
+        '    phase: Pending',
+        '    reason: Unschedulable',
+      ].join('\n'),
+    );
+    await writeFixtureFile(
+      extractDir,
+      'bundle/yamls/namespaced/default/kubevirt.io/v1/virtualmachineinstancemigrations.yaml',
+      [
+        'apiVersion: v1',
+        'items:',
+        '- apiVersion: kubevirt.io/v1',
+        '  kind: VirtualMachineInstanceMigration',
+        '  metadata:',
+        '    name: vm-a-migration',
+        '    namespace: default',
+        '  spec:',
+        '    vmiName: vm-a',
+        '  status:',
+        '    conditions:',
+        '    - message: target node is unschedulable',
+        '      reason: Unschedulable',
+        '      status: "True"',
+        '      type: Failed',
+        '    phase: Failed',
+        '    sourceNode: node-a',
+        '    targetNode: node-b',
+      ].join('\n'),
+    );
+    await writeFixtureFile(
+      extractDir,
       'bundle/yamls/namespaced/default/harvesterhci.io/v1beta1/virtualmachineimages.yaml',
       [
         'apiVersion: v1',
@@ -218,13 +291,23 @@ test('builds Harvester findings from support bundle files', async () => {
     assert.equal(result.inventory.harvester.apps.notDeployed, 1);
     assert.equal(result.inventory.harvester.addons.withIssues, 1);
     assert.equal(result.inventory.harvester.virtualization.unavailable, 1);
+    assert.equal(result.inventory.harvester.workloads.vms, 1);
+    assert.equal(result.inventory.harvester.workloads.vmIssues, 1);
+    assert.equal(result.inventory.harvester.workloads.vmis, 1);
+    assert.equal(result.inventory.harvester.workloads.vmisNotRunning, 1);
+    assert.equal(result.inventory.harvester.workloads.migrations, 1);
+    assert.equal(result.inventory.harvester.workloads.migrationsFailed, 1);
     assert.equal(result.inventory.harvester.vmImages.withIssues, 1);
     assert.equal(result.inventory.harvester.networks.withIssues, 1);
     assert.ok(result.findings.some((finding) => finding.id === 'harvester-bundle-generation-errors'));
+    assert.ok(result.findings.some((finding) => finding.id === 'harvester-vms-not-ready'));
+    assert.ok(result.findings.some((finding) => finding.id === 'harvester-vmis-not-running'));
+    assert.ok(result.findings.some((finding) => finding.id === 'harvester-vm-migrations-failed'));
     assert.ok(result.findings.some((finding) => finding.id === 'harvester-log-webhook-errors'));
     assert.ok(result.findings.some((finding) => finding.id === 'harvester-log-virtualization-scheduling'));
     assert.ok(result.findingGroups.some((group) => group.id === 'harvester-control-plane-health'));
     assert.ok(result.findingGroups.some((group) => group.id === 'harvester-virtualization-readiness'));
+    assert.ok(result.findingGroups.some((group) => group.id === 'harvester-vm-workload-health'));
     assert.ok(result.findingGroups.some((group) => group.id === 'harvester-network-health'));
     const logFinding = result.findings.find((finding) => finding.id === 'harvester-log-webhook-errors');
     assert.equal(logFinding.evidenceRefs[0].lineStart, 1);

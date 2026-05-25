@@ -94,6 +94,10 @@ export async function analyzeHarvesterSupportBundle({ extractDir, index }) {
   inventory.harvester.vmImages = imageAnalysis.inventory;
   findings.push(...imageAnalysis.findings);
 
+  const workloadAnalysis = await analyzeVirtualMachineWorkloads(context);
+  inventory.harvester.workloads = workloadAnalysis.inventory;
+  findings.push(...workloadAnalysis.findings);
+
   const networkAnalysis = await analyzeHarvesterNetwork(context);
   inventory.harvester.networks = networkAnalysis.inventory;
   findings.push(...networkAnalysis.findings);
@@ -223,6 +227,7 @@ function buildFindingGroups({ findings, inventory }) {
   );
   const virtualizationFindings = findings.filter((finding) => finding.category === 'Virtualization');
   const imageFindings = findings.filter((finding) => finding.category === 'Harvester Image');
+  const workloadFindings = findings.filter((finding) => finding.category === 'Harvester VM');
   const networkFindings = findings.filter((finding) => finding.category === 'Harvester Network');
   const eventFindings = findings.filter((finding) => finding.category === 'Kubernetes Events');
 
@@ -275,6 +280,33 @@ function buildFindingGroups({ findings, inventory }) {
         ],
         evidence: mergeEvidence([...virtualizationFindings, ...imageFindings]),
         relatedFindingIds: findingIds([...virtualizationFindings, ...imageFindings]),
+      }),
+    );
+  }
+
+  if (workloadFindings.length) {
+    groups.push(
+      createFindingGroup({
+        id: 'harvester-vm-workload-health',
+        severity: highestSeverity([...workloadFindings, schedulingFinding]),
+        title: 'Harvester VM workloads need attention',
+        description:
+          'VirtualMachine, VirtualMachineInstance, and migration resources show whether guest workloads are actually running, schedulable, and movable.',
+        impact:
+          'Affected VMs may stay stopped, pending, unschedulable, or fail live migration even if the Harvester control plane is available.',
+        affected: compactEvidence([
+          affectedMetric('VMs with issues', harvester.workloads?.vmIssues),
+          affectedMetric('VMIs not running', harvester.workloads?.vmisNotRunning),
+          affectedMetric('Failed migrations', harvester.workloads?.migrationsFailed),
+          schedulingFinding ? affectedMetric('Scheduling log matches', schedulingFinding.count) : null,
+        ]),
+        recommendedChecks: [
+          'Open the VM and VMI YAML together and compare desired run state, printableStatus, phase, nodeName, and Ready condition.',
+          'For Pending or Unschedulable workloads, compare node selectors, taints, labels, maintenance mode, cordon state, and available resources.',
+          'For failed migrations, inspect the VMIM resource plus virt-controller and virt-handler logs around the migration timestamp.',
+        ],
+        evidence: mergeEvidence([...workloadFindings, schedulingFinding]),
+        relatedFindingIds: findingIds([...workloadFindings, schedulingFinding]),
       }),
     );
   }
@@ -845,6 +877,262 @@ async function analyzeVirtualMachineImages(context) {
   return { inventory, findings };
 }
 
+async function analyzeVirtualMachineWorkloads(context) {
+  const [vmAnalysis, vmiAnalysis, migrationAnalysis] = await Promise.all([
+    analyzeVirtualMachines(context),
+    analyzeVirtualMachineInstances(context),
+    analyzeVirtualMachineMigrations(context),
+  ]);
+
+  return {
+    inventory: {
+      vms: vmAnalysis.inventory.total,
+      vmIssues: vmAnalysis.inventory.withIssues,
+      desiredRunning: vmAnalysis.inventory.desiredRunning,
+      running: vmAnalysis.inventory.running,
+      stopped: vmAnalysis.inventory.stopped,
+      vmis: vmiAnalysis.inventory.total,
+      vmisNotRunning: vmiAnalysis.inventory.notRunning,
+      migrations: migrationAnalysis.inventory.total,
+      migrationsFailed: migrationAnalysis.inventory.failed,
+      migrationsRunning: migrationAnalysis.inventory.running,
+    },
+    findings: [
+      ...vmAnalysis.findings,
+      ...vmiAnalysis.findings,
+      ...migrationAnalysis.findings,
+    ],
+  };
+}
+
+async function analyzeVirtualMachines(context) {
+  const files = await readReportFilesBySuffix(context, '/virtualmachines.yaml');
+  const inventory = {
+    total: 0,
+    desiredRunning: 0,
+    running: 0,
+    stopped: 0,
+    withIssues: 0,
+  };
+  const problemVMs = [];
+  let firstPath = null;
+
+  for (const file of files.filter((candidate) => candidate.reportPath.includes('/kubevirt.io/'))) {
+    firstPath ??= file.reportPath;
+    const virtualMachines = splitKubernetesItems(file.content);
+    inventory.total += virtualMachines.length;
+
+    for (const virtualMachine of virtualMachines) {
+      const name = readResourceDisplayName(virtualMachine) ?? 'unknown vm';
+      const spec = topLevelSection(virtualMachine, 'spec');
+      const status = topLevelSection(virtualMachine, 'status');
+      const running = parseBoolean(readScalar(spec, 'running'));
+      const runStrategy = readScalar(spec, 'runStrategy');
+      const desiredRunning = isVmDesiredRunning({ running, runStrategy });
+      const printableStatus = readScalar(status, 'printableStatus') ?? readScalar(status, 'phase');
+      const ready = extractConditions(status).find((condition) => condition.type === 'Ready');
+      const created = parseBoolean(readScalar(status, 'created'));
+      const nodeName = readScalar(status, 'nodeName');
+      const issueReason = vmIssueReason({
+        printableStatus,
+        desiredRunning,
+        ready,
+        created,
+      });
+
+      if (desiredRunning) {
+        inventory.desiredRunning += 1;
+      }
+
+      if (isRunningStatus(printableStatus)) {
+        inventory.running += 1;
+      } else if (isStoppedStatus(printableStatus)) {
+        inventory.stopped += 1;
+      }
+
+      if (!issueReason) {
+        continue;
+      }
+
+      inventory.withIssues += 1;
+      problemVMs.push(
+        compactEvidence([
+          `${name}: ${issueReason}`,
+          printableStatus ? `printableStatus=${printableStatus}` : null,
+          runStrategy ? `runStrategy=${runStrategy}` : null,
+          running !== null ? `running=${running}` : null,
+          ready ? `Ready=${ready.status}` : null,
+          nodeName ? `node=${nodeName}` : null,
+        ]).join(' · '),
+      );
+    }
+  }
+
+  if (!problemVMs.length) {
+    return { inventory, findings: [] };
+  }
+
+  return {
+    inventory,
+    findings: [
+      createFinding({
+        id: 'harvester-vms-not-ready',
+        severity: problemVMs.some((line) => /Unschedulable|Error|Failed|CrashLoop|PvcNotFound|DataVolume/i.test(line))
+          ? 'critical'
+          : 'warning',
+        category: 'Harvester VM',
+        title: 'Virtual machines are not ready',
+        description:
+          'One or more KubeVirt VirtualMachine resources are not in the expected running or ready state.',
+        evidence: problemVMs.slice(0, 8),
+        count: problemVMs.length,
+        path: firstPath,
+      }),
+    ],
+  };
+}
+
+async function analyzeVirtualMachineInstances(context) {
+  const files = await readReportFilesBySuffix(context, '/virtualmachineinstances.yaml');
+  const inventory = {
+    total: 0,
+    running: 0,
+    notRunning: 0,
+  };
+  const problemVMIs = [];
+  let firstPath = null;
+
+  for (const file of files.filter((candidate) => candidate.reportPath.includes('/kubevirt.io/'))) {
+    firstPath ??= file.reportPath;
+    const instances = splitKubernetesItems(file.content);
+    inventory.total += instances.length;
+
+    for (const instance of instances) {
+      const name = readResourceDisplayName(instance) ?? 'unknown vmi';
+      const status = topLevelSection(instance, 'status');
+      const phase = readScalar(status, 'phase');
+      const nodeName = readScalar(status, 'nodeName');
+      const reason = readScalar(status, 'reason');
+      const ready = extractConditions(status).find((condition) => condition.type === 'Ready');
+      const synchronized = extractConditions(status).find((condition) => condition.type === 'Synchronized');
+      const isRunning = phase === 'Running' && (!ready || ready.status === 'True');
+
+      if (isRunning) {
+        inventory.running += 1;
+        continue;
+      }
+
+      inventory.notRunning += 1;
+      problemVMIs.push(
+        compactEvidence([
+          `${name}: phase=${phase ?? 'unknown'}`,
+          nodeName ? `node=${nodeName}` : null,
+          reason ? `reason=${reason}` : null,
+          ready ? `Ready=${ready.status}` : null,
+          synchronized ? `Synchronized=${synchronized.status}` : null,
+          ready?.message ? `message=${ready.message}` : null,
+        ]).join(' · '),
+      );
+    }
+  }
+
+  if (!problemVMIs.length) {
+    return { inventory, findings: [] };
+  }
+
+  return {
+    inventory,
+    findings: [
+      createFinding({
+        id: 'harvester-vmis-not-running',
+        severity: problemVMIs.some((line) => /Failed|CrashLoop|Unschedulable|Error/i.test(line))
+          ? 'critical'
+          : 'warning',
+        category: 'Harvester VM',
+        title: 'VirtualMachineInstances are not running',
+        description:
+          'One or more KubeVirt VirtualMachineInstance resources are not Running with Ready=True.',
+        evidence: problemVMIs.slice(0, 8),
+        count: problemVMIs.length,
+        path: firstPath,
+      }),
+    ],
+  };
+}
+
+async function analyzeVirtualMachineMigrations(context) {
+  const files = await readReportFilesBySuffix(context, '/virtualmachineinstancemigrations.yaml');
+  const inventory = {
+    total: 0,
+    running: 0,
+    failed: 0,
+  };
+  const failedMigrations = [];
+  let firstPath = null;
+
+  for (const file of files.filter((candidate) => candidate.reportPath.includes('/kubevirt.io/'))) {
+    firstPath ??= file.reportPath;
+    const migrations = splitKubernetesItems(file.content);
+    inventory.total += migrations.length;
+
+    for (const migration of migrations) {
+      const name = readResourceDisplayName(migration) ?? 'unknown migration';
+      const spec = topLevelSection(migration, 'spec');
+      const status = topLevelSection(migration, 'status');
+      const phase = readScalar(status, 'phase');
+      const vmiName = readScalar(spec, 'vmiName') ?? extractYamlScalar(status, 'vmiName');
+      const sourceNode = extractYamlScalar(status, 'sourceNode');
+      const targetNode = extractYamlScalar(status, 'targetNode');
+      const conditions = extractConditions(status);
+      const failedCondition = conditions.find(
+        (condition) => condition.type === 'Failed' && condition.status === 'True',
+      );
+      const failed = phase === 'Failed' || phase === 'Scheduling' || failedCondition;
+
+      if (phase === 'Running') {
+        inventory.running += 1;
+      }
+
+      if (!failed) {
+        continue;
+      }
+
+      inventory.failed += 1;
+      failedMigrations.push(
+        compactEvidence([
+          `${name}: phase=${phase ?? 'unknown'}`,
+          vmiName ? `vmi=${vmiName}` : null,
+          sourceNode ? `source=${sourceNode}` : null,
+          targetNode ? `target=${targetNode}` : null,
+          failedCondition?.reason ? `reason=${failedCondition.reason}` : null,
+          failedCondition?.message ? `message=${failedCondition.message}` : null,
+        ]).join(' · '),
+      );
+    }
+  }
+
+  if (!failedMigrations.length) {
+    return { inventory, findings: [] };
+  }
+
+  return {
+    inventory,
+    findings: [
+      createFinding({
+        id: 'harvester-vm-migrations-failed',
+        severity: 'warning',
+        category: 'Harvester VM',
+        title: 'Virtual machine migrations failed',
+        description:
+          'One or more KubeVirt VirtualMachineInstanceMigration resources are failed or stuck in scheduling.',
+        evidence: failedMigrations.slice(0, 8),
+        count: failedMigrations.length,
+        path: firstPath,
+      }),
+    ],
+  };
+}
+
 async function analyzeHarvesterNetwork(context) {
   const files = await readReportFilesBySuffix(context, 'network.harvesterhci.io/v1beta1/vlanstatuses.yaml');
   const inventory = {
@@ -1265,6 +1553,21 @@ function topLevelSection(block, sectionName) {
 
 function readMetadataName(block) {
   return readScalar(topLevelSection(block, 'metadata'), 'name');
+}
+
+function readMetadataNamespace(block) {
+  return readScalar(topLevelSection(block, 'metadata'), 'namespace');
+}
+
+function readResourceDisplayName(block) {
+  const name = readMetadataName(block);
+  const namespace = readMetadataNamespace(block);
+
+  if (!name) {
+    return null;
+  }
+
+  return namespace ? `${namespace}/${name}` : name;
 }
 
 function readTopLevelScalar(block, key) {
@@ -1745,6 +2048,58 @@ function parseBoolean(value) {
   }
 
   return null;
+}
+
+function isVmDesiredRunning({ running, runStrategy }) {
+  if (running !== null) {
+    return running;
+  }
+
+  if (!runStrategy) {
+    return false;
+  }
+
+  return !['halted', 'manual'].includes(runStrategy.toLowerCase());
+}
+
+function vmIssueReason({ printableStatus, desiredRunning, ready, created }) {
+  const status = String(printableStatus ?? '').trim();
+
+  if (status && isProblemVmStatus(status)) {
+    return status;
+  }
+
+  if (desiredRunning && status && !isAcceptableDesiredVmStatus(status)) {
+    return `desired running but status is ${status}`;
+  }
+
+  if (desiredRunning && created === false) {
+    return 'desired running but VMI is not created';
+  }
+
+  if (desiredRunning && ready && ready.status !== 'True') {
+    return `Ready=${ready.status}`;
+  }
+
+  return null;
+}
+
+function isProblemVmStatus(status) {
+  return /unschedulable|error|failed|crashloop|imagepull|pvcnotfound|datavolume|waitingforvolumebinding|waitingforreceiver/i.test(
+    status,
+  );
+}
+
+function isAcceptableDesiredVmStatus(status) {
+  return /^(running|starting|migrating|provisioning)$/i.test(status);
+}
+
+function isRunningStatus(status) {
+  return /^running$/i.test(String(status ?? ''));
+}
+
+function isStoppedStatus(status) {
+  return /^(stopped|stopping|halted)$/i.test(String(status ?? ''));
 }
 
 function slugify(value) {

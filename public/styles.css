@@ -174,7 +174,8 @@ h2 {
 }
 
 .language-button:hover,
-.language-control.open .language-button {
+.language-control.open .language-button,
+.product-picker.open .language-button {
   border-color: rgba(11, 127, 79, 0.28);
   background: rgba(255, 255, 255, 0.94);
 }
@@ -196,7 +197,8 @@ h2 {
   transition: transform 0.16s ease;
 }
 
-.language-control.open .language-chevron {
+.language-control.open .language-chevron,
+.product-picker.open .language-chevron {
   transform: translateY(2px) rotate(225deg);
 }
 
@@ -317,6 +319,36 @@ legend {
   color: var(--muted);
   font-size: 0.85rem;
   font-weight: 700;
+}
+
+.product-picker {
+  position: relative;
+  width: 100%;
+}
+
+.product-picker-button {
+  width: 100%;
+  min-height: 52px;
+  border-radius: 8px;
+  font-size: 0.98rem;
+  font-weight: 800;
+  text-align: left;
+}
+
+.product-picker-button.is-placeholder {
+  color: var(--muted);
+}
+
+.product-picker-menu {
+  right: auto;
+  left: 0;
+  width: 100%;
+  min-width: 100%;
+  border-radius: 8px;
+}
+
+.product-picker .language-option {
+  border-radius: 6px;
 }
 
 .segmented-control {
@@ -608,15 +640,11 @@ legend {
   font-weight: 800;
 }
 
-.kb-product-scope select {
+.kb-product-scope .product-picker-button {
   min-height: 44px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #ffffff;
-  color: var(--text);
   font-size: 0.92rem;
   font-weight: 750;
-  padding: 0 12px;
+  padding: 0 14px;
 }
 
 .kb-expand-option {
@@ -1060,15 +1088,15 @@ legend {
   padding-top: 14px;
 }
 
-.kb-sources-header select {
-  min-height: 36px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #ffffff;
-  color: var(--text);
-  font-size: 0.82rem;
-  font-weight: 750;
-  padding: 0 10px;
+.source-filter-picker {
+  justify-self: end;
+  width: min(100%, 176px);
+}
+
+.source-filter-picker .product-picker-button {
+  min-height: 42px;
+  font-size: 0.84rem;
+  padding: 0 12px;
 }
 
 .kb-source-list {
@@ -2080,6 +2108,11 @@ td:nth-child(8) {
   .limit-label {
     width: fit-content;
     white-space: normal;
+  }
+
+  .product-picker-button {
+    width: 100%;
+    white-space: nowrap;
   }
 
   .form-actions {

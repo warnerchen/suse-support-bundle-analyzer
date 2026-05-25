@@ -152,8 +152,8 @@ The Harvester analyzer currently extracts:
 
 - Bundle metadata such as Kubernetes version, creation time, and support bundle issue description.
 - Harvester version from the installed Harvester app chart, pod labels/images, addon specs, and available `Version` resources.
-- Inventory counts for cluster nodes, harvester-system pods, catalog apps, addons, KubeVirt/CDI, VM images, VLAN statuses, events, and scanned logs.
-- Findings for collection gaps, node condition/NTP issues, Harvester pod restarts, app/addon readiness, KubeVirt/CDI readiness, VM image import failures, VLAN readiness, warning events, and selected Harvester/KubeVirt log patterns.
+- Inventory counts for cluster nodes, harvester-system pods, catalog apps, addons, KubeVirt/CDI, VM workloads, VM images, VLAN statuses, events, and scanned logs.
+- Findings for collection gaps, node condition/NTP issues, Harvester pod restarts, app/addon readiness, KubeVirt/CDI readiness, VM workload readiness, migration failures, VM image import failures, VLAN readiness, warning events, and selected Harvester/KubeVirt log patterns.
 - Correlated finding groups with impact, recommended checks, affected metrics, evidence, and related KB matches.
 
 ## KB Index
@@ -345,7 +345,7 @@ This project does not yet include authentication, authorization, multi-user tena
 
 ## Suggested Next Work
 
-- Add deeper Harvester VM workload analysis from virtual machine and VMI resources when those resources are present in support bundles.
+- Add VM-to-node/network/image correlation for Harvester findings when support bundles include enough cross-resource detail.
 - Add a pluggable semantic embedding provider.
 - Add an external vector database backend such as Qdrant for KB chunks.
 - Move metadata from JSON files to PostgreSQL when multiple app instances or workers are introduced.
