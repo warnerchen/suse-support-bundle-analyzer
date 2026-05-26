@@ -910,7 +910,7 @@ legend {
   color: var(--muted);
   font-size: 0.84rem;
   font-weight: 700;
-  padding: 10px 2px 0;
+  padding: 14px 0 2px;
 }
 
 .kb-preview-panel {
