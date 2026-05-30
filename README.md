@@ -6,11 +6,13 @@ Web application for Technical Support Engineers to upload SUSE product support b
 
 - Upload support bundle archives from the browser.
 - Select product type during upload: Longhorn or Harvester.
+- Prevent duplicate uploads for the same product by comparing bundle SHA-256 checksums.
 - Store uploaded bundle files on a local or NFS-backed filesystem path.
 - Create and resume background analysis jobs automatically.
 - Safely list, validate, and extract common archive formats.
 - Generate a safe file index and largest-file summary for each bundle.
 - Run Longhorn and Harvester inventory checks, finding correlation, and grouped diagnostics.
+- Correlate affected Harvester VM workloads with VMIs, migrations, images, networks, events, logs, and source evidence.
 - Detect Longhorn and Harvester component versions from product resources, labels, annotations, and images.
 - Preview raw evidence files from findings, largest files, and the file index.
 - Open log evidence directly around the matched line with highlighted context.
@@ -154,6 +156,7 @@ The Harvester analyzer currently extracts:
 - Harvester version from the installed Harvester app chart, pod labels/images, addon specs, and available `Version` resources.
 - Inventory counts for cluster nodes, harvester-system pods, catalog apps, addons, KubeVirt/CDI, VM workloads, VM images, VLAN statuses, events, and scanned logs.
 - Findings for collection gaps, node condition/NTP issues, Harvester pod restarts, app/addon readiness, KubeVirt/CDI readiness, VM workload readiness, migration failures, VM image import failures, VLAN readiness, warning events, and selected Harvester/KubeVirt log patterns.
+- Affected VM workload correlations that connect VM, VMI, migration, image, node, network, event, log, and source-file evidence into an impact map.
 - Correlated finding groups with impact, recommended checks, affected metrics, evidence, and related KB matches.
 
 ## KB Index
@@ -203,6 +206,8 @@ Supported archive suffixes:
 - `.tbz2`
 - `.tar.zst`
 - `.gz`
+
+If a bundle with the same product type and SHA-256 checksum already exists, the API returns `409` with `details.code` set to `duplicate_bundle` and the existing bundle summary in `details.existingBundle`.
 
 ### `GET /api/bundles`
 
@@ -345,7 +350,7 @@ This project does not yet include authentication, authorization, multi-user tena
 
 ## Suggested Next Work
 
-- Add VM-to-node/network/image correlation for Harvester findings when support bundles include enough cross-resource detail.
+- Add Longhorn volume-to-replica/node correlation when support bundles include enough cross-resource detail.
 - Add a pluggable semantic embedding provider.
 - Add an external vector database backend such as Qdrant for KB chunks.
 - Move metadata from JSON files to PostgreSQL when multiple app instances or workers are introduced.

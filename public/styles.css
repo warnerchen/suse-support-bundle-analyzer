@@ -1590,11 +1590,13 @@ td:nth-child(8) {
 }
 
 .finding-groups-section,
+.affected-objects-section,
 .findings-section {
   margin-bottom: 24px;
 }
 
 .finding-groups-section h3,
+.affected-objects-section h3,
 .findings-section h3,
 .report-grid h3,
 .report-files h3 {
@@ -1606,6 +1608,7 @@ td:nth-child(8) {
 }
 
 .finding-groups-section h3,
+.affected-objects-section h3,
 .findings-section h3 {
   color: var(--text);
   font-size: 1rem;
@@ -1656,6 +1659,122 @@ td:nth-child(8) {
 
 .finding-list {
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.affected-object-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 12px;
+}
+
+.affected-object-card {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  border: 1px solid var(--line);
+  border-left-width: 4px;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 14px;
+}
+
+.affected-object-header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.affected-object-header h4 {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 1rem;
+  line-height: 1.2;
+}
+
+.affected-object-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.affected-object-facts span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfb;
+  padding: 8px 9px;
+}
+
+.affected-object-facts small,
+.affected-object-signals h5,
+.affected-object-paths h5 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.affected-object-facts strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--green-dark);
+  font-size: 0.86rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.affected-object-signals,
+.affected-object-paths {
+  display: grid;
+  gap: 7px;
+}
+
+.affected-object-signals div,
+.affected-object-paths div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.affected-object-signals span {
+  border: 1px solid #d9e2dd;
+  border-radius: 999px;
+  background: #f7faf8;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 800;
+  padding: 5px 8px;
+}
+
+.affected-object-evidence {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  color: var(--text);
+  font-size: 0.8rem;
+  line-height: 1.35;
+  list-style: none;
+}
+
+.affected-object-evidence li {
+  border-left: 3px solid rgba(11, 127, 79, 0.28);
+  background: #fbfcfb;
+  padding: 6px 8px;
+  overflow-wrap: anywhere;
+}
+
+.object-path-link {
+  border: 1px solid #d5e2dc;
+  border-radius: 8px;
+  background: #ffffff;
+  font-size: 0.75rem;
+  padding: 6px 9px;
+  text-decoration: none;
 }
 
 .finding-group-card,

@@ -9,7 +9,11 @@ import {
   MAX_EXTRACTED_BYTES,
   MAX_REPORT_FILE_ENTRIES,
 } from '../config.js';
-import { analyzeHarvesterSupportBundle, detectHarvesterVersion } from './harvesterAnalyzer.js';
+import {
+  analyzeHarvesterSupportBundle,
+  buildHarvesterWorkloadCorrelations,
+  detectHarvesterVersion,
+} from './harvesterAnalyzer.js';
 import { analyzeLonghornSupportBundle, detectLonghornVersion } from './longhornAnalyzer.js';
 
 const execFileAsync = promisify(execFile);
@@ -78,6 +82,7 @@ export class ArchiveAnalyzer {
       },
       summary,
       inventory: productAnalysis.inventory,
+      correlations: productAnalysis.correlations ?? {},
       groupSummary: productAnalysis.groupSummary,
       findingGroups: productAnalysis.findingGroups,
       findingSummary: productAnalysis.findingSummary,
@@ -174,36 +179,54 @@ export class ArchiveAnalyzer {
   }
 
   async enrichExistingReport(report) {
-    if (
-      (report.productType === 'longhorn' && report.inventory?.longhorn?.version) ||
-      (report.productType === 'harvester' && report.inventory?.harvester?.version) ||
-      !['longhorn', 'harvester'].includes(report.productType)
-    ) {
+    if (!['longhorn', 'harvester'].includes(report.productType)) {
+      return report;
+    }
+
+    const needsVersion = !report.inventory?.[report.productType]?.version;
+    const needsHarvesterCorrelations =
+      report.productType === 'harvester' && !report.correlations?.harvesterWorkloads;
+
+    if (!needsVersion && !needsHarvesterCorrelations) {
       return report;
     }
 
     try {
       const extractDir = path.join(this.workDir, report.jobId, 'extracted');
       const index = await buildFileIndex(extractDir);
-      const version =
-        report.productType === 'harvester'
-          ? await detectHarvesterVersion({ extractDir, index })
-          : await detectLonghornVersion({ extractDir, index });
+      let nextReport = report;
 
-      if (!version) {
-        return report;
+      if (needsVersion) {
+        const version =
+          report.productType === 'harvester'
+            ? await detectHarvesterVersion({ extractDir, index })
+            : await detectLonghornVersion({ extractDir, index });
+
+        if (version) {
+          nextReport = {
+            ...nextReport,
+            inventory: {
+              ...(nextReport.inventory ?? {}),
+              [report.productType]: {
+                ...(nextReport.inventory?.[report.productType] ?? {}),
+                version,
+              },
+            },
+          };
+        }
       }
 
-      return {
-        ...report,
-        inventory: {
-          ...(report.inventory ?? {}),
-          [report.productType]: {
-            ...(report.inventory?.[report.productType] ?? {}),
-            version,
-          },
-        },
-      };
+      if (needsHarvesterCorrelations) {
+        nextReport = {
+          ...nextReport,
+          correlations: await buildHarvesterWorkloadCorrelations(
+            { extractDir, index },
+            { findings: nextReport.findings ?? [] },
+          ),
+        };
+      }
+
+      return nextReport;
     } catch (error) {
       if (error.code === 'ENOENT') {
         return report;

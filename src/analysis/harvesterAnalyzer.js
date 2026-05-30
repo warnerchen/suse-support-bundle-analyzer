@@ -5,6 +5,13 @@ const HARVESTER_RESOURCE_ROOT = 'yamls/namespaced/harvester-system';
 const MAX_FINDINGS_PER_RULE = 12;
 const MAX_LOG_FILES = 80;
 const LOG_SAMPLE_BYTES = 256 * 1024;
+const MAX_CORRELATED_WORKLOADS = 12;
+const WORKLOAD_LOG_FINDING_IDS = new Set([
+  'harvester-log-virtualization-scheduling',
+  'harvester-log-error-lines',
+  'harvester-log-webhook-errors',
+  'harvester-log-network-offload',
+]);
 
 const NODE_TRUE_CONDITIONS = new Set(['Ready', 'EtcdIsVoter']);
 const NODE_FALSE_CONDITIONS = new Set([
@@ -111,6 +118,9 @@ export async function analyzeHarvesterSupportBundle({ extractDir, index }) {
   findings.push(...logAnalysis.findings);
 
   const sortedFindings = sortFindings(dedupeFindings(findings));
+  const correlations = await buildHarvesterWorkloadCorrelations(context, {
+    findings: sortedFindings,
+  });
   const findingGroups = buildFindingGroups({
     findings: sortedFindings,
     inventory,
@@ -122,6 +132,74 @@ export async function analyzeHarvesterSupportBundle({ extractDir, index }) {
     findingGroups,
     findingSummary: summarizeFindings(sortedFindings),
     findings: sortedFindings,
+    correlations,
+  };
+}
+
+export async function buildHarvesterWorkloadCorrelations(context, { findings = [] } = {}) {
+  const [virtualMachines, instances, migrations, images, networks, events] = await Promise.all([
+    collectVirtualMachineRecords(context),
+    collectVirtualMachineInstanceRecords(context),
+    collectMigrationRecords(context),
+    collectImageRecords(context),
+    collectNetworkRecords(context),
+    collectWarningEventRecords(context),
+  ]);
+  const logReferences = collectWorkloadLogReferences(findings);
+  const findingById = new Map(findings.map((finding) => [finding.id, finding]));
+  const workloads = new Map();
+
+  for (const virtualMachine of virtualMachines) {
+    workloads.set(virtualMachine.key, {
+      namespace: virtualMachine.namespace,
+      name: virtualMachine.name,
+      vm: virtualMachine,
+    });
+  }
+
+  for (const instance of instances) {
+    const entry = workloads.get(instance.key) ?? {
+      namespace: instance.namespace,
+      name: instance.name,
+    };
+
+    entry.vmi = instance;
+    workloads.set(instance.key, entry);
+  }
+
+  for (const migration of migrations) {
+    const key = workloadKey(migration.namespace, migration.vmiName);
+    const entry = workloads.get(key) ?? {
+      namespace: migration.namespace,
+      name: migration.vmiName,
+    };
+
+    entry.migrations = [...(entry.migrations ?? []), migration];
+    workloads.set(key, entry);
+  }
+
+  const correlated = [...workloads.values()]
+    .map((workload) =>
+      buildWorkloadCorrelation({
+        workload,
+        images,
+        networks,
+        events,
+        logReferences,
+        findingById,
+      }),
+    )
+    .filter(Boolean)
+    .sort(
+      (a, b) =>
+        severityRank(a.severity) - severityRank(b.severity) ||
+        b.signalCount - a.signalCount ||
+        a.name.localeCompare(b.name),
+    )
+    .slice(0, MAX_CORRELATED_WORKLOADS);
+
+  return {
+    harvesterWorkloads: correlated,
   };
 }
 
@@ -1133,6 +1211,377 @@ async function analyzeVirtualMachineMigrations(context) {
   };
 }
 
+async function collectVirtualMachineRecords(context) {
+  const files = await readReportFilesBySuffix(context, '/virtualmachines.yaml');
+  const records = [];
+
+  for (const file of files.filter((candidate) => candidate.reportPath.includes('/kubevirt.io/'))) {
+    for (const virtualMachine of splitKubernetesItems(file.content)) {
+      const name = readMetadataName(virtualMachine);
+      const namespace = readMetadataNamespace(virtualMachine) ?? namespaceFromReportPath(file.reportPath);
+
+      if (!name) {
+        continue;
+      }
+
+      const spec = topLevelSection(virtualMachine, 'spec');
+      const status = topLevelSection(virtualMachine, 'status');
+      const running = parseBoolean(readScalar(spec, 'running'));
+      const runStrategy = readScalar(spec, 'runStrategy');
+      const desiredRunning = isVmDesiredRunning({ running, runStrategy });
+      const printableStatus = readScalar(status, 'printableStatus') ?? readScalar(status, 'phase');
+      const ready = extractConditions(status).find((condition) => condition.type === 'Ready');
+      const created = parseBoolean(readScalar(status, 'created'));
+      const nodeName = readScalar(status, 'nodeName') ?? extractYamlScalar(status, 'nodeName');
+
+      records.push({
+        kind: 'VirtualMachine',
+        key: workloadKey(namespace, name),
+        namespace,
+        name,
+        path: file.reportPath,
+        printableStatus,
+        desiredRunning,
+        runStrategy,
+        running,
+        readyStatus: ready?.status ?? null,
+        readyMessage: ready?.message ?? null,
+        nodeName,
+        desiredNodeNames: extractNodeSelectorValues(spec),
+        imageNames: extractReferencedImageNames(virtualMachine),
+        networkNames: extractVmNetworkNames(virtualMachine),
+        sourceText: virtualMachine,
+        issueReason: vmIssueReason({
+          printableStatus,
+          desiredRunning,
+          ready,
+          created,
+        }),
+      });
+    }
+  }
+
+  return records;
+}
+
+async function collectVirtualMachineInstanceRecords(context) {
+  const files = await readReportFilesBySuffix(context, '/virtualmachineinstances.yaml');
+  const records = [];
+
+  for (const file of files.filter((candidate) => candidate.reportPath.includes('/kubevirt.io/'))) {
+    for (const instance of splitKubernetesItems(file.content)) {
+      const name = readMetadataName(instance);
+      const namespace = readMetadataNamespace(instance) ?? namespaceFromReportPath(file.reportPath);
+
+      if (!name) {
+        continue;
+      }
+
+      const status = topLevelSection(instance, 'status');
+      const phase = readScalar(status, 'phase');
+      const nodeName = readScalar(status, 'nodeName');
+      const reason = readScalar(status, 'reason');
+      const ready = extractConditions(status).find((condition) => condition.type === 'Ready');
+      const synchronized = extractConditions(status).find((condition) => condition.type === 'Synchronized');
+      const isRunning = phase === 'Running' && (!ready || ready.status === 'True');
+
+      records.push({
+        kind: 'VirtualMachineInstance',
+        key: workloadKey(namespace, name),
+        namespace,
+        name,
+        path: file.reportPath,
+        phase,
+        nodeName,
+        reason,
+        readyStatus: ready?.status ?? null,
+        readyMessage: ready?.message ?? null,
+        synchronizedStatus: synchronized?.status ?? null,
+        issueReason: isRunning
+          ? null
+          : compactEvidence([
+              `phase=${phase ?? 'unknown'}`,
+              reason ? `reason=${reason}` : null,
+              ready ? `Ready=${ready.status}` : null,
+              ready?.message ? ready.message : null,
+            ]).join(' · '),
+      });
+    }
+  }
+
+  return records;
+}
+
+async function collectMigrationRecords(context) {
+  const files = await readReportFilesBySuffix(context, '/virtualmachineinstancemigrations.yaml');
+  const records = [];
+
+  for (const file of files.filter((candidate) => candidate.reportPath.includes('/kubevirt.io/'))) {
+    for (const migration of splitKubernetesItems(file.content)) {
+      const name = readMetadataName(migration);
+      const namespace = readMetadataNamespace(migration) ?? namespaceFromReportPath(file.reportPath);
+      const spec = topLevelSection(migration, 'spec');
+      const status = topLevelSection(migration, 'status');
+      const vmiName = readScalar(spec, 'vmiName') ?? extractYamlScalar(status, 'vmiName');
+
+      if (!name || !vmiName) {
+        continue;
+      }
+
+      const phase = readScalar(status, 'phase');
+      const sourceNode = extractYamlScalar(status, 'sourceNode');
+      const targetNode = extractYamlScalar(status, 'targetNode');
+      const failedCondition = extractConditions(status).find(
+        (condition) => condition.type === 'Failed' && condition.status === 'True',
+      );
+      const failed = phase === 'Failed' || phase === 'Scheduling' || Boolean(failedCondition);
+
+      records.push({
+        kind: 'VirtualMachineInstanceMigration',
+        namespace,
+        name,
+        path: file.reportPath,
+        vmiName,
+        phase,
+        sourceNode,
+        targetNode,
+        failed,
+        reason: failedCondition?.reason ?? null,
+        message: failedCondition?.message ?? null,
+      });
+    }
+  }
+
+  return records;
+}
+
+async function collectImageRecords(context) {
+  const files = await readReportFilesBySuffix(context, '/virtualmachineimages.yaml');
+  const records = [];
+
+  for (const file of files) {
+    for (const image of splitKubernetesItems(file.content)) {
+      const name = readMetadataName(image);
+      const namespace = readMetadataNamespace(image) ?? namespaceFromReportPath(file.reportPath);
+
+      if (!name) {
+        continue;
+      }
+
+      const spec = topLevelSection(image, 'spec');
+      const status = topLevelSection(image, 'status');
+      const failed = Number.parseInt(readScalar(status, 'failed') ?? '0', 10) || 0;
+      const progress = readScalar(status, 'progress');
+      const sourceType = readScalar(spec, 'sourceType');
+      const displayName = readScalar(spec, 'displayName') ?? name;
+      const imported = extractConditions(status).find((condition) => condition.type === 'Imported');
+      const retryLimitExceeded = extractConditions(status).find((condition) => condition.type === 'RetryLimitExceeded');
+
+      records.push({
+        kind: 'VirtualMachineImage',
+        namespace,
+        name,
+        displayName,
+        path: file.reportPath,
+        failed,
+        progress,
+        sourceType,
+        importedStatus: imported?.status ?? null,
+        hasIssue: failed > 0 || imported?.status !== 'True' || retryLimitExceeded?.status === 'True',
+      });
+    }
+  }
+
+  return records;
+}
+
+async function collectNetworkRecords(context) {
+  const files = await readReportFilesBySuffix(context, 'network.harvesterhci.io/v1beta1/vlanstatuses.yaml');
+  const records = [];
+
+  for (const file of files) {
+    for (const resource of splitKubernetesItems(file.content)) {
+      const name = readMetadataName(resource);
+
+      if (!name) {
+        continue;
+      }
+
+      const status = topLevelSection(resource, 'status');
+      const ready = extractConditions(status).find((condition) => condition.type?.toLowerCase() === 'ready');
+
+      records.push({
+        kind: 'VlanStatus',
+        name,
+        path: file.reportPath,
+        node: readScalar(status, 'node'),
+        clusterNetwork: readScalar(status, 'clusterNetwork'),
+        vlanConfig: readScalar(status, 'vlanConfig'),
+        readyStatus: ready?.status ?? null,
+        message: ready?.message ?? null,
+        hasIssue: ready?.status !== 'True',
+      });
+    }
+  }
+
+  return records;
+}
+
+async function collectWarningEventRecords(context) {
+  const files = await readReportFilesBySuffix(context, '/events.yaml');
+  const records = [];
+
+  for (const file of files) {
+    for (const event of splitKubernetesItems(file.content)) {
+      const type = readTopLevelScalar(event, 'type');
+
+      if (type !== 'Warning') {
+        continue;
+      }
+
+      const ref = readEventObjectRef(event);
+      const reason = readTopLevelScalar(event, 'reason') ?? 'Warning';
+      const message = readTopLevelScalar(event, 'message') ?? readTopLevelScalar(event, 'note') ?? 'Warning event';
+
+      records.push({
+        namespace: ref.namespace ?? readMetadataNamespace(event) ?? namespaceFromReportPath(file.reportPath),
+        involvedKind: ref.kind,
+        involvedName: ref.name,
+        reason,
+        message,
+        path: file.reportPath,
+      });
+    }
+  }
+
+  return records;
+}
+
+function collectWorkloadLogReferences(findings) {
+  return findings
+    .filter((finding) => WORKLOAD_LOG_FINDING_IDS.has(finding.id))
+    .flatMap((finding) =>
+      (finding.evidenceRefs ?? []).map((ref, index) => ({
+        ...ref,
+        findingId: finding.id,
+        evidence: finding.evidence?.[index] ?? ref.excerpt ?? '',
+      })),
+    );
+}
+
+function buildWorkloadCorrelation({ workload, images, networks, events, logReferences, findingById }) {
+  const vm = workload.vm ?? null;
+  const vmi = workload.vmi ?? null;
+  const migrations = workload.migrations ?? [];
+  const nodeName =
+    vmi?.nodeName ??
+    vm?.nodeName ??
+    migrations.find((migration) => migration.sourceNode)?.sourceNode ??
+    null;
+  const desiredNodeNames = vm?.desiredNodeNames ?? [];
+  const matchedImages = matchImagesToWorkload(vm, images);
+  const matchedNetworks = matchNetworksToWorkload({ vm, vmi, migrations, networks });
+  const matchedEvents = events.filter((event) => eventMatchesWorkload(event, workload)).slice(0, 3);
+  const matchedLogs = logReferences.filter((ref) => logReferenceMatchesWorkload(ref, workload)).slice(0, 3);
+  const failedMigration = migrations.find((migration) => migration.failed);
+  const imageWithIssue = matchedImages.find((image) => image.hasIssue);
+  const networkWithIssue = matchedNetworks.find((network) => network.hasIssue);
+  const relatedFindingIds = new Set();
+
+  if (vm?.issueReason) {
+    relatedFindingIds.add('harvester-vms-not-ready');
+  }
+
+  if (vmi?.issueReason) {
+    relatedFindingIds.add('harvester-vmis-not-running');
+  }
+
+  if (failedMigration) {
+    relatedFindingIds.add('harvester-vm-migrations-failed');
+  }
+
+  if (imageWithIssue) {
+    relatedFindingIds.add('harvester-vm-images-not-imported');
+  }
+
+  if (networkWithIssue) {
+    relatedFindingIds.add('harvester-vlan-status-not-ready');
+  }
+
+  if (matchedEvents.length) {
+    relatedFindingIds.add('harvester-warning-events');
+  }
+
+  for (const ref of matchedLogs) {
+    relatedFindingIds.add(ref.findingId);
+  }
+
+  const relatedFindings = [...relatedFindingIds]
+    .map((id) => findingById.get(id))
+    .filter(Boolean);
+
+  if (!relatedFindings.length) {
+    return null;
+  }
+
+  const imageNames = uniqueValues(matchedImages.map((image) => image.displayName ?? image.name));
+  const networkNames = uniqueValues([
+    ...(vm?.networkNames ?? []),
+    ...matchedNetworks.map((network) => network.clusterNetwork ?? network.name),
+  ]);
+  const status = vm?.printableStatus ?? (vmi?.phase ? `VMI ${vmi.phase}` : null);
+  const signalCount =
+    Number(Boolean(vm?.issueReason)) +
+    Number(Boolean(vmi?.issueReason)) +
+    migrations.filter((migration) => migration.failed).length +
+    matchedImages.filter((image) => image.hasIssue).length +
+    matchedNetworks.filter((network) => network.hasIssue).length +
+    matchedEvents.length +
+    matchedLogs.length;
+
+  return {
+    kind: 'VirtualMachine',
+    namespace: workload.namespace,
+    name: workload.name,
+    severity: highestSeverity(relatedFindings),
+    status,
+    vmiPhase: vmi?.phase ?? null,
+    nodeName,
+    desiredNodeNames,
+    imageNames,
+    networkNames,
+    migrations: migrations
+      .filter((migration) => migration.failed || migration.phase)
+      .map((migration) => ({
+        name: migration.name,
+        phase: migration.phase,
+        sourceNode: migration.sourceNode,
+        targetNode: migration.targetNode,
+      }))
+      .slice(0, 3),
+    eventCount: matchedEvents.length,
+    logCount: matchedLogs.length,
+    signalCount,
+    relatedFindingIds: [...relatedFindingIds],
+    paths: compactObject({
+      vm: vm?.path,
+      vmi: vmi?.path,
+      migration: failedMigration?.path ?? migrations[0]?.path,
+      image: imageWithIssue?.path ?? matchedImages[0]?.path,
+      network: networkWithIssue?.path ?? matchedNetworks[0]?.path,
+    }),
+    evidence: compactEvidence([
+      vm?.issueReason ? `VM: ${vm.issueReason}` : null,
+      vmi?.issueReason ? `VMI: ${vmi.issueReason}` : null,
+      failedMigration ? `Migration: ${failedMigration.phase ?? 'failed'}` : null,
+      imageWithIssue ? `Image: ${imageWithIssue.displayName ?? imageWithIssue.name}` : null,
+      networkWithIssue ? `Network: ${networkWithIssue.clusterNetwork ?? networkWithIssue.name}` : null,
+      matchedEvents[0] ? `Event: ${matchedEvents[0].reason} ${truncate(matchedEvents[0].message, 120)}` : null,
+      matchedLogs[0] ? `Log: ${truncate(matchedLogs[0].excerpt ?? matchedLogs[0].evidence, 120)}` : null,
+    ]),
+  };
+}
+
 async function analyzeHarvesterNetwork(context) {
   const files = await readReportFilesBySuffix(context, 'network.harvesterhci.io/v1beta1/vlanstatuses.yaml');
   const inventory = {
@@ -1585,6 +2034,141 @@ function extractYamlScalar(block, key) {
   return match ? cleanScalar(match[1]) : null;
 }
 
+function namespaceFromReportPath(reportPath) {
+  const match = normalizeReportPath(reportPath).match(/\/yamls\/namespaced\/([^/]+)\//);
+  return match ? match[1] : 'default';
+}
+
+function workloadKey(namespace, name) {
+  return `${namespace || 'default'}/${name || 'unknown'}`;
+}
+
+function extractNodeSelectorValues(section) {
+  const values = [];
+
+  for (const match of section.matchAll(/^\s+(?:kubernetes\.io\/hostname|hostname|nodeName):\s*(.*)$/gm)) {
+    values.push(cleanScalar(match[1]));
+  }
+
+  return uniqueValues(values);
+}
+
+function extractReferencedImageNames(block) {
+  const values = [];
+
+  for (const match of block.matchAll(/^\s+(?:imageName|imageID|imageId|virtualMachineImageName):\s*(.*)$/gm)) {
+    values.push(cleanScalar(match[1]));
+  }
+
+  return uniqueValues(values);
+}
+
+function extractVmNetworkNames(block) {
+  const values = [];
+
+  for (const match of block.matchAll(/^\s+networkName:\s*(.*)$/gm)) {
+    const value = cleanScalar(match[1]);
+    values.push(value);
+
+    if (value?.includes('/')) {
+      values.push(value.split('/').at(-1));
+    }
+  }
+
+  return uniqueValues(values);
+}
+
+function readEventObjectRef(event) {
+  for (const sectionName of ['involvedObject', 'regarding', 'related']) {
+    const section = topLevelSection(event, sectionName);
+
+    if (!section) {
+      continue;
+    }
+
+    const name = readScalar(section, 'name');
+
+    if (!name) {
+      continue;
+    }
+
+    return {
+      kind: readScalar(section, 'kind'),
+      name,
+      namespace: readScalar(section, 'namespace'),
+    };
+  }
+
+  return {};
+}
+
+function matchImagesToWorkload(vm, images) {
+  if (!vm) {
+    return [];
+  }
+
+  const text = vm.sourceText.toLowerCase();
+  const explicitNames = new Set(vm.imageNames.map((name) => name.toLowerCase()));
+
+  return images.filter((image) => {
+    if (image.namespace && image.namespace !== vm.namespace) {
+      return false;
+    }
+
+    const names = [image.name, image.displayName].filter(Boolean).map((name) => String(name).toLowerCase());
+    return names.some((name) => explicitNames.has(name) || text.includes(name));
+  });
+}
+
+function matchNetworksToWorkload({ vm, vmi, migrations, networks }) {
+  const networkNames = new Set((vm?.networkNames ?? []).map((name) => String(name).toLowerCase()));
+  const nodeNames = new Set(
+    uniqueValues([
+      vm?.nodeName,
+      vmi?.nodeName,
+      ...(vm?.desiredNodeNames ?? []),
+      ...migrations.flatMap((migration) => [migration.sourceNode, migration.targetNode]),
+    ]).map((name) => String(name).toLowerCase()),
+  );
+
+  return networks.filter((network) => {
+    const candidates = uniqueValues([network.name, network.clusterNetwork, network.vlanConfig]).map((name) =>
+      String(name).toLowerCase(),
+    );
+
+    return (
+      candidates.some((name) => networkNames.has(name) || networkNames.has(name.split('/').at(-1))) ||
+      (network.node && nodeNames.has(network.node.toLowerCase()))
+    );
+  });
+}
+
+function eventMatchesWorkload(event, workload) {
+  if (event.namespace && event.namespace !== workload.namespace) {
+    return false;
+  }
+
+  const names = uniqueValues([
+    workload.name,
+    workload.vm?.name,
+    workload.vmi?.name,
+    ...(workload.migrations ?? []).map((migration) => migration.name),
+  ]);
+
+  if (event.involvedName && names.includes(event.involvedName)) {
+    return true;
+  }
+
+  const text = `${event.reason} ${event.message}`.toLowerCase();
+  return names.some((name) => text.includes(String(name).toLowerCase()));
+}
+
+function logReferenceMatchesWorkload(ref, workload) {
+  const text = `${ref.excerpt ?? ''} ${ref.evidence ?? ''}`.toLowerCase();
+  const names = uniqueValues([workload.name, `${workload.namespace}/${workload.name}`]);
+  return names.some((name) => text.includes(String(name).toLowerCase()));
+}
+
 function extractChartVersion(block) {
   const chartIndex = block.indexOf('\n    chart:');
 
@@ -1898,6 +2482,16 @@ function compactEvidence(values) {
   return values.filter(Boolean).map((value) => String(value));
 }
 
+function compactObject(value) {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => Boolean(entry)),
+  );
+}
+
+function uniqueValues(values) {
+  return [...new Set(values.filter(Boolean).map((value) => String(value)))];
+}
+
 function dedupeFindings(findings) {
   const seen = new Set();
   const deduped = [];
@@ -1965,6 +2559,14 @@ function highestSeverity(findings) {
   }
 
   return 'info';
+}
+
+function severityRank(severity) {
+  return {
+    critical: 0,
+    warning: 1,
+    info: 2,
+  }[severity] ?? 3;
 }
 
 function mergeEvidence(findings) {

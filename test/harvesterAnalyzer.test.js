@@ -173,8 +173,16 @@ test('builds Harvester findings from support bundle files', async () => {
         '    running: true',
         '    template:',
         '      spec:',
+        '        networks:',
+        '        - multus:',
+        '            networkName: default/vlan-a',
+        '          name: vlan-a',
         '        nodeSelector:',
         '          kubernetes.io/hostname: node-b',
+        '        volumes:',
+        '        - dataVolume:',
+        '            name: image-a',
+        '          name: rootdisk',
         '  status:',
         '    conditions:',
         '    - message: 0/3 nodes are available: node selector did not match',
@@ -229,6 +237,26 @@ test('builds Harvester findings from support bundle files', async () => {
         '    phase: Failed',
         '    sourceNode: node-a',
         '    targetNode: node-b',
+      ].join('\n'),
+    );
+    await writeFixtureFile(
+      extractDir,
+      'bundle/yamls/namespaced/default/v1/events.yaml',
+      [
+        'apiVersion: v1',
+        'items:',
+        '- apiVersion: v1',
+        '  kind: Event',
+        '  metadata:',
+        '    name: vm-a-warning',
+        '    namespace: default',
+        '  involvedObject:',
+        '    kind: VirtualMachine',
+        '    name: vm-a',
+        '    namespace: default',
+        '  message: 0/3 nodes are available for vm-a',
+        '  reason: FailedScheduling',
+        '  type: Warning',
       ].join('\n'),
     );
     await writeFixtureFile(
@@ -309,6 +337,20 @@ test('builds Harvester findings from support bundle files', async () => {
     assert.ok(result.findingGroups.some((group) => group.id === 'harvester-virtualization-readiness'));
     assert.ok(result.findingGroups.some((group) => group.id === 'harvester-vm-workload-health'));
     assert.ok(result.findingGroups.some((group) => group.id === 'harvester-network-health'));
+    assert.equal(result.correlations.harvesterWorkloads.length, 1);
+    assert.equal(result.correlations.harvesterWorkloads[0].name, 'vm-a');
+    assert.equal(result.correlations.harvesterWorkloads[0].namespace, 'default');
+    assert.equal(result.correlations.harvesterWorkloads[0].severity, 'critical');
+    assert.equal(result.correlations.harvesterWorkloads[0].nodeName, 'node-a');
+    assert.deepEqual(result.correlations.harvesterWorkloads[0].desiredNodeNames, ['node-b']);
+    assert.ok(result.correlations.harvesterWorkloads[0].imageNames.includes('ubuntu.qcow2'));
+    assert.ok(result.correlations.harvesterWorkloads[0].networkNames.includes('default/vlan-a'));
+    assert.equal(result.correlations.harvesterWorkloads[0].eventCount, 1);
+    assert.ok(result.correlations.harvesterWorkloads[0].relatedFindingIds.includes('harvester-vms-not-ready'));
+    assert.ok(result.correlations.harvesterWorkloads[0].relatedFindingIds.includes('harvester-vmis-not-running'));
+    assert.ok(result.correlations.harvesterWorkloads[0].relatedFindingIds.includes('harvester-vm-migrations-failed'));
+    assert.ok(result.correlations.harvesterWorkloads[0].relatedFindingIds.includes('harvester-vm-images-not-imported'));
+    assert.ok(result.correlations.harvesterWorkloads[0].relatedFindingIds.includes('harvester-vlan-status-not-ready'));
     const logFinding = result.findings.find((finding) => finding.id === 'harvester-log-webhook-errors');
     assert.equal(logFinding.evidenceRefs[0].lineStart, 1);
     assert.equal(logFinding.evidenceRefs[0].path, 'bundle/logs/harvester-system/virt-controller-a/virt-controller.log');

@@ -191,7 +191,8 @@ const TRANSLATIONS = {
     unableToLoadReport: 'Unable to load analysis report.',
     unableToLoadEvidenceFile: 'Unable to load evidence file.',
     deleteFailed: 'Delete failed.',
-    chooseProduct: 'Choose Longhorn or Harvester.',
+    chooseProduct: 'Choose the corresponding product.',
+    duplicateBundleUploaded: 'This bundle has already been uploaded. Open the existing analysis result instead.',
     chooseKbProduct: 'Choose a product before importing KB sources.',
     selectBundleArchive: 'Select a support bundle archive.',
     fileTooLarge: ({ size }) => `File is larger than ${size}.`,
@@ -219,6 +220,19 @@ const TRANSLATIONS = {
     groupedFindings: 'Grouped Findings',
     findingGroupSeveritySummary: 'Finding group severity summary',
     noFindingGroups: 'No correlated finding groups detected.',
+    impactMap: 'Impact Map',
+    affectedObjects: 'Affected Objects',
+    affectedObjectSeveritySummary: 'Affected object severity summary',
+    objectSignals: ({ count }) => `${count} signal${count === 1 ? '' : 's'}`,
+    namespace: 'Namespace',
+    node: 'Node',
+    desiredNode: 'Desired Node',
+    image: 'Image',
+    network: 'Network',
+    vmStatus: 'VM Status',
+    vmiPhase: 'VMI Phase',
+    relatedSignals: 'Related Signals',
+    sourceEvidence: 'Source Evidence',
     linkedFindings: ({ count }) => `${count} linked findings`,
     recommendedChecks: 'Recommended Checks',
     relatedKb: 'Related KB',
@@ -404,7 +418,8 @@ const TRANSLATIONS = {
     unableToLoadReport: '无法加载分析报告。',
     unableToLoadEvidenceFile: '无法加载证据文件。',
     deleteFailed: '删除失败。',
-    chooseProduct: '请选择 Longhorn 或 Harvester。',
+    chooseProduct: '请选择对应的产品。',
+    duplicateBundleUploaded: '该 Bundle 已上传，请直接查看已有分析结果。',
     chooseKbProduct: '导入 KB 来源前请选择产品。',
     selectBundleArchive: '请选择 support bundle 压缩包。',
     fileTooLarge: ({ size }) => `文件大于 ${size}。`,
@@ -432,6 +447,19 @@ const TRANSLATIONS = {
     groupedFindings: '发现项分组',
     findingGroupSeveritySummary: '发现项分组严重性汇总',
     noFindingGroups: '当前没有检测到关联发现项分组。',
+    impactMap: '影响面',
+    affectedObjects: '受影响对象',
+    affectedObjectSeveritySummary: '受影响对象严重性汇总',
+    objectSignals: ({ count }) => `${count} 个信号`,
+    namespace: '命名空间',
+    node: '节点',
+    desiredNode: '期望节点',
+    image: '镜像',
+    network: '网络',
+    vmStatus: 'VM 状态',
+    vmiPhase: 'VMI 阶段',
+    relatedSignals: '相关信号',
+    sourceEvidence: '来源证据',
     linkedFindings: ({ count }) => `${count} 个关联发现项`,
     recommendedChecks: '建议检查',
     relatedKb: '相关 KB',
@@ -1477,7 +1505,13 @@ async function uploadBundle(event) {
     setProgress(100);
     await refreshDashboard();
   } catch (error) {
-    setFormMessage(error.message, 'error');
+    if (error.code === 'duplicate_bundle') {
+      await refreshDashboard();
+      setFormMessage(t('duplicateBundleUploaded'), 'error');
+    } else {
+      setFormMessage(error.message, 'error');
+    }
+
     setProgress(0);
   } finally {
     submitButton.disabled = false;
@@ -1836,7 +1870,11 @@ function sendWithProgress(url, body, onProgress) {
         return;
       }
 
-      reject(new Error(payload.error?.message ?? t('uploadFailed')));
+      const error = new Error(payload.error?.message ?? t('uploadFailed'));
+      error.status = request.status;
+      error.details = payload.error?.details ?? null;
+      error.code = error.details?.code ?? null;
+      reject(error);
     });
 
     request.addEventListener('error', () => reject(new Error(t('networkUploadError'))));
@@ -2217,6 +2255,7 @@ function renderReport(report) {
     </div>
 
     ${renderFindingGroups(report.findingGroups ?? [], groupSummary)}
+    ${renderAffectedObjects(report)}
     ${renderFindings(report.findings ?? [], findingSummary, report.findingGroups?.length)}
 
     <div class="report-grid">
@@ -2270,6 +2309,129 @@ function renderFindingGroups(groups, summary) {
           : `<p class="empty-report">${escapeHtml(t('noFindingGroups'))}</p>`
       }
     </section>
+  `;
+}
+
+function renderAffectedObjects(report) {
+  const workloads = report.productType === 'harvester' ? report.correlations?.harvesterWorkloads ?? [] : [];
+
+  if (!workloads.length) {
+    return '';
+  }
+
+  const summary = summarizeSeverity(workloads);
+
+  return `
+    <section class="affected-objects-section" aria-labelledby="affectedObjectsTitle">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">${escapeHtml(t('impactMap'))}</p>
+          <h3 id="affectedObjectsTitle">${escapeHtml(t('affectedObjects'))}</h3>
+        </div>
+        <div class="finding-summary" aria-label="${escapeHtml(t('affectedObjectSeveritySummary'))}">
+          <span class="severity-dot critical"></span>${summary.critical}
+          <span class="severity-dot warning"></span>${summary.warning}
+          <span class="severity-dot info"></span>${summary.info}
+        </div>
+      </div>
+      <div class="affected-object-list">
+        ${workloads.map(renderAffectedObject).join('')}
+      </div>
+    </section>
+  `;
+}
+
+function renderAffectedObject(workload) {
+  const facts = [
+    [t('namespace'), workload.namespace],
+    [t('vmStatus'), workload.status],
+    [t('vmiPhase'), workload.vmiPhase],
+    [t('node'), workload.nodeName],
+    [t('desiredNode'), formatList(workload.desiredNodeNames)],
+    [t('image'), formatList(workload.imageNames)],
+    [t('network'), formatList(workload.networkNames)],
+    [t('migrations'), formatMigrations(workload.migrations)],
+    [t('events'), workload.eventCount ? String(workload.eventCount) : null],
+    [t('logs'), workload.logCount ? String(workload.logCount) : null],
+  ].filter(([, value]) => value);
+
+  return `
+    <article class="affected-object-card finding-${escapeHtml(workload.severity ?? 'info')}">
+      <div class="affected-object-header">
+        <div>
+          <p class="eyebrow">${escapeHtml(workload.kind ?? 'VirtualMachine')}</p>
+          <h4>${escapeHtml(workload.name)}</h4>
+        </div>
+        <span class="finding-severity">${escapeHtml(t('objectSignals', { count: workload.signalCount ?? 0 }))}</span>
+      </div>
+      <div class="affected-object-facts">
+        ${facts
+          .map(
+            ([label, value]) => `
+              <span>
+                <small>${escapeHtml(label)}</small>
+                <strong>${escapeHtml(value)}</strong>
+              </span>
+            `,
+          )
+          .join('')}
+      </div>
+      ${renderAffectedObjectSignals(workload.relatedFindingIds)}
+      ${renderAffectedObjectEvidence(workload.evidence)}
+      ${renderAffectedObjectPaths(workload.paths)}
+    </article>
+  `;
+}
+
+function renderAffectedObjectSignals(ids = []) {
+  if (!ids.length) {
+    return '';
+  }
+
+  return `
+    <div class="affected-object-signals">
+      <h5>${escapeHtml(t('relatedSignals'))}</h5>
+      <div>
+        ${ids.map((id) => `<span>${escapeHtml(findingIdLabel(id))}</span>`).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function renderAffectedObjectEvidence(evidence = []) {
+  if (!evidence.length) {
+    return '';
+  }
+
+  return `
+    <ul class="affected-object-evidence">
+      ${evidence.slice(0, 4).map((line) => `<li>${escapeHtml(localizeEvidenceLine(line))}</li>`).join('')}
+    </ul>
+  `;
+}
+
+function renderAffectedObjectPaths(paths = {}) {
+  const entries = Object.entries(paths);
+
+  if (!entries.length) {
+    return '';
+  }
+
+  return `
+    <div class="affected-object-paths">
+      <h5>${escapeHtml(t('sourceEvidence'))}</h5>
+      <div>
+        ${entries
+          .map(
+            ([label, reportPath]) => `
+              <button class="evidence-link object-path-link" type="button" data-preview-path="${escapeHtml(reportPath)}">
+                ${escapeHtml(label)}
+              </button>
+            `,
+          )
+          .join('')}
+      </div>
+    </div>
   `;
 }
 
@@ -2467,6 +2629,58 @@ function renderEvidencePathButton(reportPath) {
       ${escapeHtml(reportPath)}
     </button>
   `;
+}
+
+function summarizeSeverity(items = []) {
+  return items.reduce(
+    (summary, item) => {
+      if (Object.hasOwn(summary, item.severity)) {
+        summary[item.severity] += 1;
+      }
+
+      return summary;
+    },
+    {
+      critical: 0,
+      warning: 0,
+      info: 0,
+    },
+  );
+}
+
+function formatList(values = []) {
+  const list = values.filter(Boolean);
+  return list.length ? list.join(', ') : '';
+}
+
+function formatMigrations(migrations = []) {
+  if (!migrations.length) {
+    return '';
+  }
+
+  return migrations
+    .map((migration) =>
+      [
+        migration.name,
+        migration.phase,
+        migration.sourceNode && migration.targetNode ? `${migration.sourceNode}->${migration.targetNode}` : null,
+      ]
+        .filter(Boolean)
+        .join(' · '),
+    )
+    .join(', ');
+}
+
+function findingIdLabel(id) {
+  const localized = FINDING_TEXT[currentLanguage]?.[id]?.title ?? FINDING_TEXT[DEFAULT_LANGUAGE]?.[id]?.title;
+
+  if (localized) {
+    return localized;
+  }
+
+  return String(id)
+    .replace(/^harvester-/, '')
+    .replaceAll('-', ' ');
 }
 
 function renderArchiveMetadata(inventory = {}) {

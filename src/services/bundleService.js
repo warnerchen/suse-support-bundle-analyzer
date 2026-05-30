@@ -36,7 +36,7 @@ export class BundleService {
     const file = formData.get('bundleFile');
 
     if (!PRODUCT_TYPES.has(productType)) {
-      throw validationError('Choose Longhorn or Harvester before uploading.');
+      throw validationError('Choose the corresponding product before uploading.');
     }
 
     if (!file || typeof file.stream !== 'function') {
@@ -78,7 +78,14 @@ export class BundleService {
       retentionUntil: retentionUntil.toISOString(),
     };
 
-    return this.repository.save(record);
+    const saved = await this.repository.saveIfNotDuplicate(record);
+
+    if (saved.duplicate) {
+      await this.storage.deleteDirectory(id);
+      throw duplicateBundleError(saved.record);
+    }
+
+    return saved.record;
   }
 }
 
@@ -87,4 +94,26 @@ function validationError(message, details = undefined) {
   error.statusCode = 400;
   error.details = details;
   return error;
+}
+
+function duplicateBundleError(existingBundle) {
+  const error = new Error('Bundle already uploaded.');
+  error.statusCode = 409;
+  error.details = {
+    code: 'duplicate_bundle',
+    existingBundle: summarizeExistingBundle(existingBundle),
+  };
+  return error;
+}
+
+function summarizeExistingBundle(bundle) {
+  return {
+    id: bundle.id,
+    productType: bundle.productType,
+    originalFilename: bundle.originalFilename,
+    fileSize: bundle.fileSize,
+    sha256: bundle.sha256,
+    createdAt: bundle.createdAt,
+    uploadStatus: bundle.uploadStatus,
+  };
 }

@@ -43,6 +43,32 @@ export class BundleRepository {
     });
   }
 
+  async saveIfNotDuplicate(record) {
+    return this.#serialize(async () => {
+      const records = await this.list();
+      const existing = records.find(
+        (candidate) =>
+          candidate.productType === record.productType &&
+          candidate.sha256 === record.sha256,
+      );
+
+      if (existing) {
+        return {
+          duplicate: true,
+          record: existing,
+        };
+      }
+
+      records.unshift(record);
+      await this.#writeAll(records);
+
+      return {
+        duplicate: false,
+        record,
+      };
+    });
+  }
+
   async delete(id) {
     return this.#serialize(async () => {
       const records = await this.list();
