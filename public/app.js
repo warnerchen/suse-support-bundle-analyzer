@@ -161,6 +161,10 @@ const TRANSLATIONS = {
     importPreview: 'Import Preview',
     import: ({ count }) => `Import ${count || ''}`.trim(),
     noDocumentsPreviewed: 'No documents could be previewed.',
+    readyDocuments: ({ count }) => `Ready · ${count}`,
+    warningDocuments: ({ count }) => `Warnings · ${count}`,
+    blockedDocuments: ({ count }) => `Blocked · ${count}`,
+    importFailures: ({ count }) => `Fetch failures · ${count}`,
     urlsChecked: ({ count, importable, blockedOrFailed }) =>
       `${count} URLs checked, ${importable} importable, ${blockedOrFailed} blocked or failed.`,
     filesChecked: ({ count, importable, blockedOrFailed }) =>
@@ -388,6 +392,10 @@ const TRANSLATIONS = {
     importPreview: '导入预览',
     import: ({ count }) => `导入${count ? ` ${count}` : ''}`,
     noDocumentsPreviewed: '没有可预览的文档。',
+    readyDocuments: ({ count }) => `就绪 · ${count}`,
+    warningDocuments: ({ count }) => `警告 · ${count}`,
+    blockedDocuments: ({ count }) => `已阻止 · ${count}`,
+    importFailures: ({ count }) => `获取失败 · ${count}`,
     urlsChecked: ({ count, importable, blockedOrFailed }) =>
       `已检查 ${count} 个 URL，${importable} 个可导入，${blockedOrFailed} 个被阻止或失败。`,
     filesChecked: ({ count, importable, blockedOrFailed }) =>
@@ -1030,6 +1038,13 @@ function bindEvents() {
   kbExpandLinks.addEventListener('change', clearKbPreview);
   kbSourceFilter.addEventListener('change', () => renderKbSources(kbSources));
   kbPreviewPanel.addEventListener('click', (event) => {
+    const previewTab = event.target.closest('[data-kb-preview-tab]');
+
+    if (previewTab) {
+      setKbPreviewTab(previewTab.dataset.kbPreviewTab);
+      return;
+    }
+
     const confirmButton = event.target.closest('[data-confirm-kb-import]');
 
     if (confirmButton) {
@@ -1766,6 +1781,43 @@ function renderKbPreview(preview = {}) {
   const documents = preview.documents ?? [];
   const failures = preview.failures ?? [];
   const importableCount = preview.importableCount ?? 0;
+  const readyDocuments = documents.filter((document) => document.status === 'ready');
+  const warningDocuments = documents.filter((document) => document.status === 'warning');
+  const blockedDocuments = documents.filter((document) => document.status === 'blocked');
+  const previewSections = [
+    {
+      status: 'warning',
+      title: t('warningDocuments', { count: warningDocuments.length }),
+      documents: warningDocuments,
+      renderItems: () => warningDocuments.map(renderKbPreviewDocument).join(''),
+    },
+    {
+      status: 'ready',
+      title: t('readyDocuments', { count: readyDocuments.length }),
+      documents: readyDocuments,
+      renderItems: () => readyDocuments.map(renderKbPreviewDocument).join(''),
+    },
+    {
+      status: 'blocked',
+      title: t('blockedDocuments', { count: blockedDocuments.length }),
+      documents: blockedDocuments,
+      renderItems: () => blockedDocuments.map(renderKbPreviewDocument).join(''),
+    },
+  ].filter((section) => section.documents.length);
+  const previewTabs = [
+    ...previewSections,
+    ...(failures.length
+      ? [
+          {
+            status: 'failures',
+            title: t('importFailures', { count: failures.length }),
+            documents: failures,
+            renderItems: () => failures.map(renderKbPreviewFailure).join(''),
+          },
+        ]
+      : []),
+  ];
+  const activeTab = previewTabs.find((section) => section.status === 'warning')?.status ?? previewTabs[0]?.status;
 
   kbPreviewPanel.hidden = false;
   kbPreviewPanel.innerHTML = `
@@ -1782,11 +1834,10 @@ function renderKbPreview(preview = {}) {
       </div>
     </div>
     ${
-      documents.length
-        ? `<div class="kb-preview-list">${documents.map(renderKbPreviewDocument).join('')}</div>`
+      previewTabs.length
+        ? renderKbPreviewTabs(previewTabs, activeTab)
         : `<p class="empty-report">${escapeHtml(t('noDocumentsPreviewed'))}</p>`
     }
-    ${failures.length ? `<div class="kb-preview-failures">${failures.map(renderKbPreviewFailure).join('')}</div>` : ''}
   `;
 }
 
@@ -1825,6 +1876,61 @@ function renderKbPreviewDocument(document) {
       </ul>
     </article>
   `;
+}
+
+function renderKbPreviewTabs(sections, activeTab) {
+  return `
+    <div class="kb-preview-tab-shell">
+      <div class="kb-preview-tabs" role="tablist">
+        ${sections
+          .map(
+            (section) => `
+              <button
+                class="kb-preview-tab ${section.status === activeTab ? 'active' : ''}"
+                type="button"
+                role="tab"
+                aria-selected="${section.status === activeTab ? 'true' : 'false'}"
+                data-kb-preview-tab="${escapeHtml(section.status)}"
+              >
+                ${escapeHtml(section.title)}
+              </button>
+            `,
+          )
+          .join('')}
+      </div>
+      ${sections
+        .map(
+          (section) => `
+            <section
+              class="kb-preview-tab-panel kb-preview-panel-${escapeHtml(section.status)}"
+              data-kb-preview-panel="${escapeHtml(section.status)}"
+              ${section.status === activeTab ? '' : 'hidden'}
+            >
+              <div class="${section.status === 'failures' ? 'kb-preview-failures' : 'kb-preview-list'}">
+                ${section.renderItems()}
+              </div>
+            </section>
+          `,
+        )
+        .join('')}
+    </div>
+  `;
+}
+
+function setKbPreviewTab(status) {
+  if (!status) {
+    return;
+  }
+
+  for (const tab of kbPreviewPanel.querySelectorAll('[data-kb-preview-tab]')) {
+    const active = tab.dataset.kbPreviewTab === status;
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-selected', active ? 'true' : 'false');
+  }
+
+  for (const panel of kbPreviewPanel.querySelectorAll('[data-kb-preview-panel]')) {
+    panel.hidden = panel.dataset.kbPreviewPanel !== status;
+  }
 }
 
 function renderKbPreviewFailure(failure) {

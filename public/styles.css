@@ -951,6 +951,60 @@ legend {
   white-space: nowrap;
 }
 
+.kb-preview-tab-shell {
+  display: grid;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f7faf8;
+  padding: 10px 12px 12px;
+}
+
+.kb-preview-tabs {
+  display: flex;
+  min-width: 0;
+  gap: 20px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line);
+  padding: 0 0 0 4px;
+  scrollbar-width: none;
+}
+
+.kb-preview-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.kb-preview-tab {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 850;
+  padding: 0 0 9px;
+  white-space: nowrap;
+}
+
+.kb-preview-tab:hover {
+  color: var(--green-dark);
+}
+
+.kb-preview-tab.active {
+  border-bottom-color: var(--green);
+  color: var(--green-dark);
+}
+
+.kb-preview-tab-panel {
+  max-height: min(58vh, 580px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px 2px 0;
+  scrollbar-gutter: stable;
+}
+
 .kb-preview-list {
   display: grid;
   gap: 10px;

@@ -21,6 +21,7 @@ export const ANALYSIS_WORK_DIR = process.env.ANALYSIS_WORK_DIR
 export const KB_STORAGE_DIR = process.env.KB_STORAGE_DIR
   ? path.resolve(process.env.KB_STORAGE_DIR)
   : path.join(DATA_DIR, 'kb');
+export const KB_EMBEDDING_PROVIDER = normalizeEmbeddingProvider(process.env.KB_EMBEDDING_PROVIDER);
 
 export const PORT = Number.parseInt(process.env.PORT ?? '3000', 10);
 export const HOST = process.env.HOST ?? '127.0.0.1';
@@ -41,7 +42,15 @@ export const MAX_REPORT_FILE_ENTRIES = Number.parseInt(
   10,
 );
 export const KB_EMBEDDING_DIMENSIONS = Number.parseInt(
-  process.env.KB_EMBEDDING_DIMENSIONS ?? '256',
+  process.env.KB_EMBEDDING_DIMENSIONS ?? (KB_EMBEDDING_PROVIDER === 'gemini' ? '1536' : '256'),
+  10,
+);
+export const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? '';
+export const GEMINI_EMBEDDING_MODEL = process.env.GEMINI_EMBEDDING_MODEL ?? 'gemini-embedding-001';
+export const GEMINI_API_BASE_URL =
+  process.env.GEMINI_API_BASE_URL ?? 'https://generativelanguage.googleapis.com/v1beta';
+export const GEMINI_EMBEDDING_TIMEOUT_MS = Number.parseInt(
+  process.env.GEMINI_EMBEDDING_TIMEOUT_MS ?? '30000',
   10,
 );
 export const KB_REMOTE_FETCH_TIMEOUT_MS = Number.parseInt(
@@ -84,3 +93,17 @@ export const ALLOWED_ARCHIVE_SUFFIXES = [
   '.tar',
   '.gz',
 ];
+
+function normalizeEmbeddingProvider(value) {
+  const provider = String(value ?? 'local-hash').trim().toLowerCase();
+
+  if (provider === 'gemini') {
+    return provider;
+  }
+
+  if (provider === 'local' || provider === 'local-hash' || provider === 'local-hash-v1') {
+    return 'local-hash';
+  }
+
+  throw new Error(`Unsupported KB embedding provider: ${value}`);
+}

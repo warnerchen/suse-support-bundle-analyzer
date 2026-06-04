@@ -5,7 +5,6 @@ import {
   BUNDLE_STORAGE_DIR,
   CREATE_BUNDLE_STORAGE_DIR,
   HOST,
-  KB_EMBEDDING_DIMENSIONS,
   KB_STORAGE_DIR,
   MAX_UPLOAD_BYTES,
   METADATA_DIR,
@@ -13,9 +12,9 @@ import {
   PRODUCT_OPTIONS,
   PUBLIC_DIR,
 } from './config.js';
+import { createKbEmbeddingProvider } from './kb/embeddingProviderFactory.js';
 import { KbService } from './kb/kbService.js';
 import { KbStore } from './kb/kbStore.js';
-import { LocalEmbeddingProvider } from './kb/localEmbeddingProvider.js';
 import { AnalysisJobRepository } from './repositories/analysisJobRepository.js';
 import { AnalysisReportRepository } from './repositories/analysisReportRepository.js';
 import { BundleRepository } from './repositories/bundleRepository.js';
@@ -35,7 +34,7 @@ const repository = new BundleRepository(METADATA_DIR);
 const bundleService = new BundleService({ repository, storage });
 const kbStore = new KbStore({
   storageDir: KB_STORAGE_DIR,
-  embeddingProvider: new LocalEmbeddingProvider({ dimensions: KB_EMBEDDING_DIMENSIONS }),
+  embeddingProvider: createKbEmbeddingProvider(),
 });
 const kbService = new KbService({ store: kbStore });
 const analysisService = new AnalysisService({

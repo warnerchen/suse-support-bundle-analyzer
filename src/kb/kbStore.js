@@ -67,11 +67,19 @@ export class KbStore {
     let indexedChunks = 0;
 
     for (const document of acceptedDocuments) {
-      const chunks = chunkKbDocument(document).map((chunk) => ({
-        ...chunk,
-        vector: this.embeddingProvider.embedText(`${document.title}\n${chunk.content}`),
-        searchText: `${document.title}\n${chunk.content}`.toLowerCase(),
-      }));
+      const chunks = [];
+
+      for (const chunk of chunkKbDocument(document)) {
+        const searchText = `${document.title}\n${chunk.content}`;
+
+        chunks.push({
+          ...chunk,
+          vector: await this.embeddingProvider.embedText(searchText, {
+            taskType: 'RETRIEVAL_DOCUMENT',
+          }),
+          searchText: searchText.toLowerCase(),
+        });
+      }
 
       if (!chunks.length) {
         continue;
@@ -113,7 +121,9 @@ export class KbStore {
       return [];
     }
 
-    const queryVector = this.embeddingProvider.embedText(query);
+    const queryVector = await this.embeddingProvider.embedText(query, {
+      taskType: 'RETRIEVAL_QUERY',
+    });
     const queryTokens = new Set(tokenize(query));
     const documentsById = new Map(state.documents.map((document) => [document.id, document]));
     const bestByDocument = new Map();
@@ -188,6 +198,10 @@ export class KbStore {
     try {
       const raw = await fs.readFile(this.indexPath, 'utf8');
       this.state = JSON.parse(raw);
+
+      if (!embeddingDescriptorsEqual(this.state.embedding, this.embeddingProvider.descriptor)) {
+        this.state = emptyState(this.embeddingProvider.descriptor);
+      }
     } catch (error) {
       if (error.code !== 'ENOENT') {
         throw error;
@@ -219,6 +233,18 @@ function emptyState(embedding) {
     embedding,
     documents: [],
     chunks: [],
+  };
+}
+
+function embeddingDescriptorsEqual(left, right) {
+  return JSON.stringify(normalizeEmbeddingDescriptor(left)) === JSON.stringify(normalizeEmbeddingDescriptor(right));
+}
+
+function normalizeEmbeddingDescriptor(descriptor) {
+  return {
+    provider: descriptor?.provider ?? null,
+    model: descriptor?.model ?? null,
+    dimensions: descriptor?.dimensions ?? null,
   };
 }
 

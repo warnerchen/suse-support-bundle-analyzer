@@ -50,7 +50,17 @@ PORT=4000 DATA_DIR=/path/to/data npm run dev
 KB storage and import behavior can also be configured:
 
 ```bash
-KB_STORAGE_DIR=/path/to/kb KB_REMOTE_IMPORT_LIMIT=100 KB_EMBEDDING_DIMENSIONS=256 npm run dev
+KB_STORAGE_DIR=/path/to/kb KB_REMOTE_IMPORT_LIMIT=100 KB_EMBEDDING_PROVIDER=local-hash npm run dev
+```
+
+To use Gemini for semantic KB embeddings:
+
+```bash
+KB_EMBEDDING_PROVIDER=gemini \
+GEMINI_API_KEY='your-gemini-api-key' \
+GEMINI_EMBEDDING_MODEL=gemini-embedding-001 \
+KB_EMBEDDING_DIMENSIONS=1536 \
+npm run dev
 ```
 
 For a production-like NFS setup, mount the NFS export first, then point the app at that mount path:
@@ -72,11 +82,16 @@ When `BUNDLE_STORAGE_DIR` is set, the directory must already exist and be readab
 | `METADATA_DIR` | `./data/metadata` | JSON metadata storage root |
 | `ANALYSIS_WORK_DIR` | `./data/work` | Extracted bundle work directory |
 | `KB_STORAGE_DIR` | `./data/kb` | KB index storage root |
+| `KB_EMBEDDING_PROVIDER` | `local-hash` | KB embedding provider: `local-hash` or `gemini` |
 | `MAX_UPLOAD_BYTES` | `1073741824` | Upload size limit |
 | `MAX_ARCHIVE_ENTRIES` | `20000` | Maximum archive entries accepted |
 | `MAX_EXTRACTED_BYTES` | `2147483648` | Maximum extracted bundle size |
 | `MAX_REPORT_FILE_ENTRIES` | `5000` | File index entries kept in reports |
-| `KB_EMBEDDING_DIMENSIONS` | `256` | Dimensions for the local hash vector provider |
+| `KB_EMBEDDING_DIMENSIONS` | `256` local hash, `1536` Gemini | KB embedding vector dimensions |
+| `GEMINI_API_KEY` | empty | Gemini API key, required when `KB_EMBEDDING_PROVIDER=gemini` |
+| `GEMINI_EMBEDDING_MODEL` | `gemini-embedding-001` | Gemini embedding model id |
+| `GEMINI_API_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta` | Gemini API base URL |
+| `GEMINI_EMBEDDING_TIMEOUT_MS` | `30000` | Gemini embedding request timeout |
 | `KB_REMOTE_FETCH_TIMEOUT_MS` | `15000` | Remote KB fetch timeout |
 | `KB_REMOTE_IMPORT_LIMIT` | `80` | Maximum discovered URLs imported per URL request |
 | `KB_TEXT_IMPORT_MAX_BYTES` | `2097152` | Maximum remote or Markdown KB document size |
@@ -132,9 +147,11 @@ The app is intentionally small and modular:
 - `src/kb/kbService.js`: URL/Markdown KB preview, quality checks, import, source deletion, report enrichment.
 - `src/kb/kbStore.js`: local KB document/chunk/vector persistence and search.
 - `src/kb/localEmbeddingProvider.js`: deterministic local hash vectors for offline testing.
+- `src/kb/geminiEmbeddingProvider.js`: Gemini REST embedding provider for semantic KB vectors.
+- `src/kb/embeddingProviderFactory.js`: KB embedding provider selection from environment configuration.
 - `public/*`: browser UI.
 
-The current KB vector provider is `local-hash-v1`. It is useful for local development and deterministic tests, but it is not a semantic embedding model. A production semantic embedding provider and external vector database can be added behind the KB store/provider boundary later.
+The default KB vector provider is `local-hash-v1`. It is useful for local development and deterministic tests, but it is not a semantic embedding model. Set `KB_EMBEDDING_PROVIDER=gemini` to embed KB chunks and KB search queries with Gemini. The index metadata records provider, model, and dimensions; when any of those values change, the app starts a fresh current index view so incompatible vectors are not mixed. Re-import KB sources after changing provider, model, or dimensions.
 
 ## Longhorn Analysis
 
@@ -173,7 +190,9 @@ Before import, the UI can preview documents and show quality status:
 - `warning`: importable but worth reviewing, for example short content or missing title.
 - `blocked`: not importable, for example dynamic shell pages without readable article text.
 
-Imported documents are normalized, chunked, embedded with `local-hash-v1`, and stored in `kb-index.json`. Reports are enriched by searching the KB index for each product finding group.
+Imported documents are normalized, chunked, embedded by the configured provider, and stored in `kb-index.json`. Reports are enriched by searching the KB index for each product finding group.
+
+With `KB_EMBEDDING_PROVIDER=gemini`, KB document chunks are sent to Gemini during import. KB search text and report finding-group query text are also sent to Gemini when searching/enriching reports. Keep `local-hash` for fully offline tests or when customer-sensitive text should not leave the local environment.
 
 ## API
 
@@ -345,13 +364,13 @@ git diff --check
 - Uploaded filenames are sanitized before storage.
 - Static file responses include security headers.
 - Support bundles and KB indexes are stored outside git by default.
+- Gemini embeddings send KB content and KB search/report-enrichment query text to Google's Gemini API when enabled.
 
 This project does not yet include authentication, authorization, multi-user tenancy, retention policies, or sensitive-data scanning.
 
 ## Suggested Next Work
 
 - Add Longhorn volume-to-replica/node correlation when support bundles include enough cross-resource detail.
-- Add a pluggable semantic embedding provider.
 - Add an external vector database backend such as Qdrant for KB chunks.
 - Move metadata from JSON files to PostgreSQL when multiple app instances or workers are introduced.
 - Add authentication and role-based access before exposing the service beyond a trusted local network.
