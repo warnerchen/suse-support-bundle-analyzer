@@ -49,12 +49,14 @@ export class KbService {
     fetchTimeoutMs = KB_REMOTE_FETCH_TIMEOUT_MS,
     importLimit = KB_REMOTE_IMPORT_LIMIT,
     maxTextBytes = KB_TEXT_IMPORT_MAX_BYTES,
+    logger = null,
   }) {
     this.store = store;
     this.fetchImpl = fetchImpl;
     this.fetchTimeoutMs = fetchTimeoutMs;
     this.importLimit = importLimit;
     this.maxTextBytes = maxTextBytes;
+    this.logger = logger;
   }
 
   async ensureReady() {
@@ -70,11 +72,25 @@ export class KbService {
   }
 
   async previewFromUrls(urls, { expandLinks = true, productType = null } = {}) {
+    const startedAt = Date.now();
     const prepared = await this.#prepareUrlImport(urls, { expandLinks, productType });
-    return buildPreviewSummary(prepared);
+    const preview = buildPreviewSummary(prepared);
+    this.logger?.info('kb.preview_urls.completed', {
+      productType,
+      expandLinks,
+      requestedUrls: prepared.requestedUrls.length,
+      discoveredUrls: prepared.discoveredUrls.length,
+      importableCount: preview.importableCount,
+      warningCount: preview.warningCount,
+      blockedCount: preview.blockedCount,
+      failureCount: preview.failures.length,
+      durationMs: Date.now() - startedAt,
+    });
+    return preview;
   }
 
   async importFromUrls(urls, { expandLinks = true, productType = null } = {}) {
+    const startedAt = Date.now();
     const prepared = await this.#prepareUrlImport(urls, { expandLinks, productType });
     const importableDocuments = prepared.documents
       .filter((entry) => entry.preview.importable)
@@ -87,6 +103,16 @@ export class KbService {
       }));
 
     const result = await this.store.upsertDocuments(importableDocuments);
+    this.logger?.info('kb.import_urls.completed', {
+      productType,
+      expandLinks,
+      requestedUrls: prepared.requestedUrls.length,
+      discoveredUrls: prepared.discoveredUrls.length,
+      documentsImported: result.documentsImported,
+      chunksIndexed: result.chunksIndexed,
+      failureCount: prepared.failures.length + blockedFailures.length,
+      durationMs: Date.now() - startedAt,
+    });
 
     return {
       requestedUrls: prepared.requestedUrls,
@@ -98,11 +124,23 @@ export class KbService {
   }
 
   async previewFromFiles(files, { productType = null } = {}) {
+    const startedAt = Date.now();
     const prepared = await this.#prepareFileImport(files, { productType });
-    return buildPreviewSummary(prepared);
+    const preview = buildPreviewSummary(prepared);
+    this.logger?.info('kb.preview_files.completed', {
+      productType,
+      requestedFiles: prepared.requestedFiles,
+      importableCount: preview.importableCount,
+      warningCount: preview.warningCount,
+      blockedCount: preview.blockedCount,
+      failureCount: preview.failures.length,
+      durationMs: Date.now() - startedAt,
+    });
+    return preview;
   }
 
   async importFromFiles(files, { productType = null } = {}) {
+    const startedAt = Date.now();
     const prepared = await this.#prepareFileImport(files, { productType });
     const importableDocuments = prepared.documents
       .filter((entry) => entry.preview.importable)
@@ -115,6 +153,14 @@ export class KbService {
       }));
 
     const result = await this.store.upsertDocuments(importableDocuments);
+    this.logger?.info('kb.import_files.completed', {
+      productType,
+      requestedFiles: prepared.requestedFiles,
+      documentsImported: result.documentsImported,
+      chunksIndexed: result.chunksIndexed,
+      failureCount: prepared.failures.length + blockedFailures.length,
+      durationMs: Date.now() - startedAt,
+    });
 
     return {
       requestedFiles: prepared.requestedFiles,
@@ -133,11 +179,27 @@ export class KbService {
       throw error;
     }
 
+    this.logger?.info('kb.source_deleted', {
+      sourceId: deleted.id,
+      productType: deleted.productType,
+      removedChunks: deleted.removedChunks,
+      totalDocuments: deleted.totalDocuments,
+      totalChunks: deleted.totalChunks,
+    });
+
     return deleted;
   }
 
   async search(query, options = {}) {
-    return this.store.search(query, options);
+    const startedAt = Date.now();
+    const results = await this.store.search(query, options);
+    this.logger?.debug('kb.search.completed', {
+      productType: options.productType,
+      limit: options.limit,
+      resultCount: results.length,
+      durationMs: Date.now() - startedAt,
+    });
+    return results;
   }
 
   async enrichReport(report) {

@@ -2092,11 +2092,19 @@ function renderKbStatus(kb = {}) {
       <span>${escapeHtml(t('chunksLabel'))}</span>
     </div>
     <div class="kb-stat kb-stat-provider">
-      <strong>${escapeHtml(kb.embedding?.provider ?? 'unknown')}</strong>
+      <strong>${escapeHtml(embeddingProviderLabel(kb.embedding?.provider))}</strong>
       <span>${escapeHtml(t('dims', { count: String(kb.embedding?.dimensions ?? '') }))}</span>
     </div>
     <div class="kb-updated">${escapeHtml(t('updatedAt', { date: formatDate(kb.updatedAt) }))}</div>
   `;
+}
+
+function embeddingProviderLabel(provider) {
+  if (provider === 'gemini') {
+    return 'Gemini';
+  }
+
+  return provider ?? 'unknown';
 }
 
 function renderKbSources(sources = []) {

@@ -1,13 +1,14 @@
 import crypto from 'node:crypto';
 
 export class AnalysisService {
-  constructor({ analyzer, bundleRepository, jobRepository, reportRepository, storage, kbService = null }) {
+  constructor({ analyzer, bundleRepository, jobRepository, reportRepository, storage, kbService = null, logger = null }) {
     this.analyzer = analyzer;
     this.bundleRepository = bundleRepository;
     this.jobRepository = jobRepository;
     this.reportRepository = reportRepository;
     this.storage = storage;
     this.kbService = kbService;
+    this.logger = logger;
     this.pendingJobIds = [];
     this.processing = false;
   }
@@ -31,6 +32,11 @@ export class AnalysisService {
 
     await this.jobRepository.save(job);
     this.enqueue(job.id);
+    this.logger?.info('analysis.queued', {
+      jobId: job.id,
+      bundleId: job.bundleId,
+      productType: job.productType,
+    });
     return job;
   }
 
@@ -122,11 +128,15 @@ export class AnalysisService {
   enqueue(jobId) {
     if (!this.pendingJobIds.includes(jobId)) {
       this.pendingJobIds.push(jobId);
+      this.logger?.debug('analysis.enqueued', {
+        jobId,
+        queueDepth: this.pendingJobIds.length,
+      });
     }
 
     setTimeout(() => {
       this.#drainQueue().catch((error) => {
-        console.error(error);
+        this.logger?.error('analysis.queue_error', { error });
       });
     }, 0);
   }
@@ -149,6 +159,7 @@ export class AnalysisService {
   }
 
   async #processJob(jobId) {
+    const startedAt = Date.now();
     const existingJob = await this.jobRepository.findById(jobId);
 
     if (!existingJob || existingJob.status !== 'queued') {
@@ -160,6 +171,11 @@ export class AnalysisService {
       stage: 'preparing',
       startedAt: new Date().toISOString(),
       errorMessage: null,
+    });
+    this.logger?.info('analysis.started', {
+      jobId,
+      bundleId: existingJob.bundleId,
+      productType: existingJob.productType,
     });
 
     try {
@@ -174,7 +190,10 @@ export class AnalysisService {
         archivePath,
         bundle,
         jobId,
-        updateStage: (stage) => this.jobRepository.update(jobId, { stage }),
+        updateStage: (stage) => {
+          this.logger?.debug('analysis.stage', { jobId, stage });
+          return this.jobRepository.update(jobId, { stage });
+        },
       });
       const enrichedReport = await this.#enrichReport(report);
 
@@ -186,12 +205,27 @@ export class AnalysisService {
         reportAvailable: true,
         summary: enrichedReport.summary,
       });
+      this.logger?.info('analysis.completed', {
+        jobId,
+        bundleId: existingJob.bundleId,
+        productType: existingJob.productType,
+        durationMs: Date.now() - startedAt,
+        findingCount: enrichedReport.findings?.length ?? 0,
+        findingGroupCount: enrichedReport.findingGroups?.length ?? 0,
+      });
     } catch (error) {
       await this.jobRepository.update(jobId, {
         status: 'failed',
         stage: 'failed',
         failedAt: new Date().toISOString(),
-      errorMessage: error.message,
+        errorMessage: error.message,
+      });
+      this.logger?.error('analysis.failed', {
+        jobId,
+        bundleId: existingJob.bundleId,
+        productType: existingJob.productType,
+        durationMs: Date.now() - startedAt,
+        error,
       });
     }
   }
@@ -204,7 +238,11 @@ export class AnalysisService {
     try {
       return await this.kbService.enrichReport(report);
     } catch (error) {
-      console.error(error);
+      this.logger?.warn('analysis.kb_enrichment_failed', {
+        jobId: report?.jobId,
+        productType: report?.productType,
+        error,
+      });
       return {
         ...report,
         kbSummary: {

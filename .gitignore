@@ -5,6 +5,7 @@ data/bundles/**
 data/metadata/**
 data/kb/**
 data/work/**
+data/logs/**
 !data/bundles/.gitkeep
 !data/metadata/.gitkeep
 !data/work/.gitkeep

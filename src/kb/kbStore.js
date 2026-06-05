@@ -1,31 +1,40 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chunkKbDocument } from './kbText.js';
-import { cosineSimilarity, LocalEmbeddingProvider, tokenize } from './localEmbeddingProvider.js';
+import { LocalEmbeddingProvider, tokenize } from './localEmbeddingProvider.js';
+import { LocalVectorStore } from './localVectorStore.js';
 
 const INDEX_FILENAME = 'kb-index.json';
 
 export class KbStore {
-  constructor({ storageDir, embeddingProvider = new LocalEmbeddingProvider() }) {
+  constructor({ storageDir, embeddingProvider = new LocalEmbeddingProvider(), vectorStore = null, logger = null }) {
     this.storageDir = storageDir;
     this.indexPath = path.join(storageDir, INDEX_FILENAME);
     this.embeddingProvider = embeddingProvider;
+    this.vectorStore = vectorStore ?? new LocalVectorStore({ storageDir });
+    this.logger = logger;
     this.state = null;
+    this.legacyChunks = [];
+    this.vectorStoreReady = false;
   }
 
   async ensureReady() {
     await fs.mkdir(this.storageDir, { recursive: true });
     await this.#loadState();
+    await this.#ensureVectorStoreReady();
   }
 
   async getStats() {
     const state = await this.#loadState();
+    await this.#ensureVectorStoreReady();
+    const vectorStats = await this.vectorStore.getStats();
 
     return {
       documentCount: state.documents.length,
-      chunkCount: state.chunks.length,
-      updatedAt: state.updatedAt,
-      embedding: state.embedding,
+      chunkCount: vectorStats.chunkCount,
+      updatedAt: latestTimestamp(state.updatedAt, vectorStats.updatedAt),
+      embedding: vectorStats.embedding,
+      vectorStore: vectorStats.vectorStore,
       sources: sortSources(state.documents.map(toSourceSummary)),
     };
   }
@@ -42,10 +51,12 @@ export class KbStore {
 
   async upsertDocuments(documents) {
     const state = await this.#loadState();
+    await this.#ensureVectorStoreReady();
     const now = new Date().toISOString();
     const acceptedDocuments = documents.filter((document) => document.body?.trim());
     const sourceKeys = new Set(acceptedDocuments.map((document) => document.sourceUri || document.id));
     const documentIds = new Set(acceptedDocuments.map((document) => document.id));
+    const vectorStats = await this.vectorStore.getStats();
 
     if (!acceptedDocuments.length) {
       return {
@@ -53,15 +64,22 @@ export class KbStore {
         chunksIndexed: 0,
         documentsSkipped: documents.length,
         totalDocuments: state.documents.length,
-        totalChunks: state.chunks.length,
+        totalChunks: vectorStats.chunkCount,
         updatedAt: state.updatedAt,
       };
     }
 
+    const removedDocumentIds = state.documents
+      .filter((document) => documentIds.has(document.id) || sourceKeys.has(document.sourceUri || document.id))
+      .map((document) => document.id);
+
     state.documents = state.documents.filter(
       (document) => !documentIds.has(document.id) && !sourceKeys.has(document.sourceUri || document.id),
     );
-    state.chunks = state.chunks.filter((chunk) => !documentIds.has(chunk.documentId));
+
+    for (const documentId of removedDocumentIds) {
+      await this.vectorStore.deleteDocumentChunks(documentId);
+    }
 
     let importedDocuments = 0;
     let indexedChunks = 0;
@@ -85,7 +103,7 @@ export class KbStore {
         continue;
       }
 
-      state.documents.push({
+      const documentSummary = {
         id: document.id,
         title: document.title,
         sourceUri: document.sourceUri,
@@ -94,30 +112,35 @@ export class KbStore {
         importedAt: document.importedAt ?? now,
         charCount: document.body.length,
         chunkCount: chunks.length,
-      });
-      state.chunks.push(...chunks);
+      };
+
+      state.documents.push(documentSummary);
+      await this.vectorStore.upsertDocumentChunks(documentSummary.id, chunks);
       importedDocuments += 1;
       indexedChunks += chunks.length;
     }
 
     state.updatedAt = now;
     state.embedding = this.embeddingProvider.descriptor;
+    state.vectorStore = this.vectorStore.descriptor;
     await this.#saveState(state);
+    const updatedVectorStats = await this.vectorStore.getStats();
 
     return {
       documentsImported: importedDocuments,
       chunksIndexed: indexedChunks,
       documentsSkipped: documents.length - importedDocuments,
       totalDocuments: state.documents.length,
-      totalChunks: state.chunks.length,
+      totalChunks: updatedVectorStats.chunkCount,
       updatedAt: state.updatedAt,
     };
   }
 
   async search(query, { productType = null, limit = 5, minScore = 0.07 } = {}) {
     const state = await this.#loadState();
+    await this.#ensureVectorStoreReady();
 
-    if (!state.chunks.length || !String(query ?? '').trim()) {
+    if (!String(query ?? '').trim()) {
       return [];
     }
 
@@ -125,49 +148,17 @@ export class KbStore {
       taskType: 'RETRIEVAL_QUERY',
     });
     const queryTokens = new Set(tokenize(query));
-    const documentsById = new Map(state.documents.map((document) => [document.id, document]));
-    const bestByDocument = new Map();
 
-    for (const chunk of state.chunks) {
-      const document = documentsById.get(chunk.documentId);
-
-      if (!document) {
-        continue;
-      }
-
-      if (productType && document.productType !== 'unknown' && document.productType !== productType) {
-        continue;
-      }
-
-      const vectorScore = cosineSimilarity(queryVector, chunk.vector);
-      const keywordScore = keywordOverlapScore(queryTokens, chunk.searchText);
-      const score = vectorScore * 0.72 + keywordScore * 0.28;
-
-      if (score < minScore) {
-        continue;
-      }
-
-      const candidate = {
-        id: document.id,
-        title: document.title,
-        sourceUri: document.sourceUri,
-        productType: document.productType,
-        score: Number(score.toFixed(3)),
-        excerpt: createExcerpt(chunk.content, queryTokens),
-        chunkIndex: chunk.chunkIndex,
-      };
-      const existing = bestByDocument.get(document.id);
-
-      if (!existing || candidate.score > existing.score) {
-        bestByDocument.set(document.id, candidate);
-      }
-    }
-
-    return [...bestByDocument.values()].sort((a, b) => b.score - a.score).slice(0, limit);
+    return this.vectorStore.search(queryVector, queryTokens, state.documents, {
+      productType,
+      limit,
+      minScore,
+    });
   }
 
   async deleteDocument(id) {
     const state = await this.#loadState();
+    await this.#ensureVectorStoreReady();
     const documentId = String(id ?? '').trim();
     const document = state.documents.find((candidate) => candidate.id === documentId);
 
@@ -175,17 +166,16 @@ export class KbStore {
       return null;
     }
 
-    const chunksBefore = state.chunks.length;
     state.documents = state.documents.filter((candidate) => candidate.id !== documentId);
-    state.chunks = state.chunks.filter((chunk) => chunk.documentId !== documentId);
+    const vectorDelete = await this.vectorStore.deleteDocumentChunks(documentId);
     state.updatedAt = new Date().toISOString();
     await this.#saveState(state);
 
     return {
       ...toSourceSummary(document),
-      removedChunks: chunksBefore - state.chunks.length,
+      removedChunks: vectorDelete.removedChunks,
       totalDocuments: state.documents.length,
-      totalChunks: state.chunks.length,
+      totalChunks: vectorDelete.totalChunks,
       updatedAt: state.updatedAt,
     };
   }
@@ -197,10 +187,14 @@ export class KbStore {
 
     try {
       const raw = await fs.readFile(this.indexPath, 'utf8');
-      this.state = JSON.parse(raw);
+      const parsed = JSON.parse(raw);
 
-      if (!embeddingDescriptorsEqual(this.state.embedding, this.embeddingProvider.descriptor)) {
+      if (!embeddingDescriptorsEqual(parsed.embedding, this.embeddingProvider.descriptor)) {
         this.state = emptyState(this.embeddingProvider.descriptor);
+        this.legacyChunks = [];
+      } else {
+        this.legacyChunks = Array.isArray(parsed.chunks) ? parsed.chunks : [];
+        this.state = normalizeState(parsed, this.embeddingProvider.descriptor, this.vectorStore.descriptor);
       }
     } catch (error) {
       if (error.code !== 'ENOENT') {
@@ -211,6 +205,26 @@ export class KbStore {
     }
 
     return this.state;
+  }
+
+  async #ensureVectorStoreReady() {
+    if (this.vectorStoreReady) {
+      return;
+    }
+
+    await this.vectorStore.ensureReady({ embedding: this.embeddingProvider.descriptor });
+    this.vectorStoreReady = true;
+
+    if (this.legacyChunks.length && (await this.vectorStore.isEmpty())) {
+      const migratedChunks = this.legacyChunks.length;
+      await this.vectorStore.replaceAllChunks(this.legacyChunks);
+      this.legacyChunks = [];
+      await this.#saveState(this.state);
+      this.logger?.info('kb.legacy_vectors_migrated', {
+        chunkCount: migratedChunks,
+        vectorStore: this.vectorStore.descriptor,
+      });
+    }
   }
 
   async #saveState(state) {
@@ -231,8 +245,19 @@ function emptyState(embedding) {
     createdAt: now,
     updatedAt: null,
     embedding,
+    vectorStore: null,
     documents: [],
-    chunks: [],
+  };
+}
+
+function normalizeState(state, embedding, vectorStore) {
+  return {
+    version: state.version ?? 1,
+    createdAt: state.createdAt ?? new Date().toISOString(),
+    updatedAt: state.updatedAt ?? null,
+    embedding,
+    vectorStore: state.vectorStore ?? vectorStore,
+    documents: Array.isArray(state.documents) ? state.documents : [],
   };
 }
 
@@ -265,35 +290,14 @@ function sortSources(sources) {
   return [...sources].sort((a, b) => String(b.importedAt ?? '').localeCompare(String(a.importedAt ?? '')));
 }
 
-function keywordOverlapScore(queryTokens, text) {
-  if (!queryTokens.size) {
-    return 0;
+function latestTimestamp(left, right) {
+  if (!left) {
+    return right ?? null;
   }
 
-  let hits = 0;
-
-  for (const token of queryTokens) {
-    if (text.includes(token)) {
-      hits += 1;
-    }
+  if (!right) {
+    return left;
   }
 
-  return hits / Math.sqrt(queryTokens.size * Math.max(queryTokens.size, 3));
-}
-
-function createExcerpt(content, queryTokens) {
-  const normalized = content.replace(/\s+/g, ' ').trim();
-  let start = 0;
-
-  for (const token of queryTokens) {
-    const index = normalized.toLowerCase().indexOf(token);
-
-    if (index !== -1) {
-      start = Math.max(0, index - 90);
-      break;
-    }
-  }
-
-  const excerpt = normalized.slice(start, start + 300);
-  return `${start > 0 ? '...' : ''}${excerpt}${start + 300 < normalized.length ? '...' : ''}`;
+  return left > right ? left : right;
 }

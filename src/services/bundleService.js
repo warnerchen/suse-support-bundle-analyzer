@@ -5,9 +5,10 @@ import { hasAllowedArchiveSuffix } from '../utils/archiveValidation.js';
 import { sanitizeFilename } from '../utils/filenames.js';
 
 export class BundleService {
-  constructor({ repository, storage }) {
+  constructor({ repository, storage, logger = null }) {
     this.repository = repository;
     this.storage = storage;
+    this.logger = logger;
   }
 
   async listBundles() {
@@ -27,6 +28,12 @@ export class BundleService {
 
     await this.storage.deleteDirectory(bundle.id);
     await this.repository.delete(id);
+    this.logger?.info('bundle.deleted', {
+      bundleId: bundle.id,
+      productType: bundle.productType,
+      fileSize: bundle.fileSize,
+      storageBackend: bundle.storageBackend,
+    });
 
     return bundle;
   }
@@ -82,8 +89,22 @@ export class BundleService {
 
     if (saved.duplicate) {
       await this.storage.deleteDirectory(id);
+      this.logger?.warn('bundle.duplicate', {
+        bundleId: id,
+        existingBundleId: saved.record.id,
+        productType,
+        fileSize: stored.size,
+      });
       throw duplicateBundleError(saved.record);
     }
+
+    this.logger?.info('bundle.uploaded', {
+      bundleId: saved.record.id,
+      productType: saved.record.productType,
+      fileSize: saved.record.fileSize,
+      storageBackend: saved.record.storageBackend,
+      sha256: saved.record.sha256,
+    });
 
     return saved.record;
   }

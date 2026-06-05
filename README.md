@@ -77,12 +77,15 @@ When `BUNDLE_STORAGE_DIR` is set, the directory must already exist and be readab
 | --- | --- | --- |
 | `HOST` | `127.0.0.1` | HTTP bind address |
 | `PORT` | `3000` | HTTP port |
+| `LOG_LEVEL` | `info` | Structured log level: `debug`, `info`, `warn`, `error`, or `off` |
+| `LOG_FILE` | empty | Optional JSON-lines log file path |
 | `DATA_DIR` | `./data` | Root for local app data |
 | `BUNDLE_STORAGE_DIR` | `./data/bundles` | Bundle file storage root |
 | `METADATA_DIR` | `./data/metadata` | JSON metadata storage root |
 | `ANALYSIS_WORK_DIR` | `./data/work` | Extracted bundle work directory |
 | `KB_STORAGE_DIR` | `./data/kb` | KB index storage root |
 | `KB_EMBEDDING_PROVIDER` | `local-hash` | KB embedding provider: `local-hash` or `gemini` |
+| `KB_VECTOR_STORE` | `local-json` | KB vector store adapter; `local-json` is currently implemented |
 | `MAX_UPLOAD_BYTES` | `1073741824` | Upload size limit |
 | `MAX_ARCHIVE_ENTRIES` | `20000` | Maximum archive entries accepted |
 | `MAX_EXTRACTED_BYTES` | `2147483648` | Maximum extracted bundle size |
@@ -106,6 +109,7 @@ data/
     {bundle_id}/{original_filename}
   kb/
     kb-index.json
+    kb-vectors.json
   metadata/
     bundles.json
     analysis-jobs.json
@@ -126,6 +130,7 @@ For NFS-backed bundle storage, a typical layout is:
 
 /var/lib/suse-support-bundle-analyzer/
   kb/kb-index.json
+  kb/kb-vectors.json
   metadata/bundles.json
   metadata/analysis-jobs.json
   metadata/analysis-reports/{job_id}.json
@@ -145,13 +150,15 @@ The app is intentionally small and modular:
 - `src/analysis/longhornAnalyzer.js`: Longhorn inventory, version detection, findings, finding groups, log evidence references.
 - `src/analysis/harvesterAnalyzer.js`: Harvester inventory, version detection, findings, finding groups, log evidence references.
 - `src/kb/kbService.js`: URL/Markdown KB preview, quality checks, import, source deletion, report enrichment.
-- `src/kb/kbStore.js`: local KB document/chunk/vector persistence and search.
+- `src/kb/kbStore.js`: KB source metadata orchestration and vector-store delegation.
+- `src/kb/localVectorStore.js`: local JSON-backed KB chunk/vector persistence and search.
 - `src/kb/localEmbeddingProvider.js`: deterministic local hash vectors for offline testing.
 - `src/kb/geminiEmbeddingProvider.js`: Gemini REST embedding provider for semantic KB vectors.
 - `src/kb/embeddingProviderFactory.js`: KB embedding provider selection from environment configuration.
+- `src/kb/vectorStoreFactory.js`: KB vector store adapter selection from environment configuration.
 - `public/*`: browser UI.
 
-The default KB vector provider is `local-hash-v1`. It is useful for local development and deterministic tests, but it is not a semantic embedding model. Set `KB_EMBEDDING_PROVIDER=gemini` to embed KB chunks and KB search queries with Gemini. The index metadata records provider, model, and dimensions; when any of those values change, the app starts a fresh current index view so incompatible vectors are not mixed. Re-import KB sources after changing provider, model, or dimensions.
+The default KB embedding provider is `local-hash-v1`. It is useful for local development and deterministic tests, but it is not a semantic embedding model. Set `KB_EMBEDDING_PROVIDER=gemini` to embed KB chunks and KB search queries with Gemini. The local vector store is `local-json-v1`, configured through `KB_VECTOR_STORE=local-json`. The index metadata records embedding provider, model, dimensions, and vector-store adapter; when embedding values change, the app starts a fresh current index view so incompatible vectors are not mixed. Re-import KB sources after changing provider, model, or dimensions.
 
 ## Longhorn Analysis
 
@@ -190,7 +197,7 @@ Before import, the UI can preview documents and show quality status:
 - `warning`: importable but worth reviewing, for example short content or missing title.
 - `blocked`: not importable, for example dynamic shell pages without readable article text.
 
-Imported documents are normalized, chunked, embedded by the configured provider, and stored in `kb-index.json`. Reports are enriched by searching the KB index for each product finding group.
+Imported documents are normalized, chunked, embedded by the configured provider, and indexed through the configured vector store. `kb-index.json` stores KB source metadata, while `kb-vectors.json` stores local chunk vectors for `KB_VECTOR_STORE=local-json`. Existing older `kb-index.json` files that still contain chunks are migrated to `kb-vectors.json` on startup.
 
 With `KB_EMBEDDING_PROVIDER=gemini`, KB document chunks are sent to Gemini during import. KB search text and report finding-group query text are also sent to Gemini when searching/enriching reports. Keep `local-hash` for fully offline tests or when customer-sensitive text should not leave the local environment.
 
@@ -354,6 +361,26 @@ node --check src/analysis/longhornAnalyzer.js
 node --check src/analysis/harvesterAnalyzer.js
 node --check public/app.js
 git diff --check
+```
+
+Structured logs are emitted as JSON lines. By default they go to the console:
+
+```bash
+LOG_LEVEL=debug npm run dev
+```
+
+To persist logs for local debugging, set `LOG_FILE`:
+
+```bash
+LOG_LEVEL=debug LOG_FILE=./data/logs/app.log npm run dev
+```
+
+Useful local log inspection commands:
+
+```bash
+tail -f ./data/logs/app.log
+grep '"event":"analysis.failed"' ./data/logs/app.log
+grep '"event":"kb.import_urls.completed"' ./data/logs/app.log
 ```
 
 ## Security Notes

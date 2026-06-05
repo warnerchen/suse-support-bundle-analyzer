@@ -22,9 +22,12 @@ export const KB_STORAGE_DIR = process.env.KB_STORAGE_DIR
   ? path.resolve(process.env.KB_STORAGE_DIR)
   : path.join(DATA_DIR, 'kb');
 export const KB_EMBEDDING_PROVIDER = normalizeEmbeddingProvider(process.env.KB_EMBEDDING_PROVIDER);
+export const KB_VECTOR_STORE = normalizeVectorStore(process.env.KB_VECTOR_STORE);
 
 export const PORT = Number.parseInt(process.env.PORT ?? '3000', 10);
 export const HOST = process.env.HOST ?? '127.0.0.1';
+export const LOG_LEVEL = normalizeLogLevel(process.env.LOG_LEVEL);
+export const LOG_FILE = process.env.LOG_FILE ? path.resolve(process.env.LOG_FILE) : '';
 export const MAX_UPLOAD_BYTES = Number.parseInt(
   process.env.MAX_UPLOAD_BYTES ?? String(1024 * 1024 * 1024),
   10,
@@ -106,4 +109,28 @@ function normalizeEmbeddingProvider(value) {
   }
 
   throw new Error(`Unsupported KB embedding provider: ${value}`);
+}
+
+function normalizeVectorStore(value) {
+  const vectorStore = String(value ?? 'local-json').trim().toLowerCase();
+
+  if (vectorStore === 'local' || vectorStore === 'local-json' || vectorStore === 'local-json-v1') {
+    return 'local-json';
+  }
+
+  if (vectorStore === 'qdrant') {
+    throw new Error('KB_VECTOR_STORE=qdrant is reserved for the upcoming Qdrant adapter and is not implemented yet.');
+  }
+
+  throw new Error(`Unsupported KB vector store: ${value}`);
+}
+
+function normalizeLogLevel(value) {
+  const level = String(value ?? 'info').trim().toLowerCase();
+
+  if (['debug', 'info', 'warn', 'error', 'off'].includes(level)) {
+    return level;
+  }
+
+  throw new Error(`Unsupported log level: ${value}`);
 }

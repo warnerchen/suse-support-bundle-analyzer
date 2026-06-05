@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import http from 'node:http';
 import { ArchiveAnalyzer } from './analysis/archiveAnalyzer.js';
 import {
@@ -15,6 +16,7 @@ import {
 import { createKbEmbeddingProvider } from './kb/embeddingProviderFactory.js';
 import { KbService } from './kb/kbService.js';
 import { KbStore } from './kb/kbStore.js';
+import { createKbVectorStore } from './kb/vectorStoreFactory.js';
 import { AnalysisJobRepository } from './repositories/analysisJobRepository.js';
 import { AnalysisReportRepository } from './repositories/analysisReportRepository.js';
 import { BundleRepository } from './repositories/bundleRepository.js';
@@ -24,6 +26,7 @@ import { NfsBundleStorage } from './storage/nfsBundleStorage.js';
 import { allowedArchiveSuffixes } from './utils/archiveValidation.js';
 import { sendError, sendJson, setSecurityHeaders } from './utils/http.js';
 import { readJsonBody } from './utils/jsonBody.js';
+import { logger } from './utils/logger.js';
 import { parseMultipartForm } from './utils/requestForm.js';
 import { serveStaticFile } from './utils/staticFiles.js';
 
@@ -31,12 +34,21 @@ const storage = new NfsBundleStorage(BUNDLE_STORAGE_DIR, {
   createRoot: CREATE_BUNDLE_STORAGE_DIR,
 });
 const repository = new BundleRepository(METADATA_DIR);
-const bundleService = new BundleService({ repository, storage });
+const bundleService = new BundleService({
+  repository,
+  storage,
+  logger: logger.child({ component: 'bundle-service' }),
+});
 const kbStore = new KbStore({
   storageDir: KB_STORAGE_DIR,
   embeddingProvider: createKbEmbeddingProvider(),
+  vectorStore: createKbVectorStore({ storageDir: KB_STORAGE_DIR }),
+  logger: logger.child({ component: 'kb-store' }),
 });
-const kbService = new KbService({ store: kbStore });
+const kbService = new KbService({
+  store: kbStore,
+  logger: logger.child({ component: 'kb-service' }),
+});
 const analysisService = new AnalysisService({
   analyzer: new ArchiveAnalyzer({ workDir: ANALYSIS_WORK_DIR }),
   bundleRepository: repository,
@@ -44,6 +56,7 @@ const analysisService = new AnalysisService({
   reportRepository: new AnalysisReportRepository(METADATA_DIR),
   storage,
   kbService,
+  logger: logger.child({ component: 'analysis-service' }),
 });
 
 await storage.ensureReady();
@@ -51,10 +64,27 @@ await kbService.ensureReady();
 await analysisService.resumePendingJobs();
 
 const server = http.createServer(async (request, response) => {
+  const requestId = crypto.randomUUID();
+  const startedAt = Date.now();
+  let requestPath = '';
+
   setSecurityHeaders(response);
 
   try {
     const url = new URL(request.url, `http://${request.headers.host ?? HOST}`);
+    requestPath = url.pathname;
+
+    if (requestPath.startsWith('/api/')) {
+      response.on('finish', () => {
+        logger.info('http.request', {
+          requestId,
+          method: request.method,
+          path: requestPath,
+          statusCode: response.statusCode,
+          durationMs: Date.now() - startedAt,
+        });
+      });
+    }
 
     if (url.pathname === '/api/health' && request.method === 'GET') {
       sendJson(response, 200, { status: 'ok' });
@@ -290,15 +320,27 @@ const server = http.createServer(async (request, response) => {
     const statusCode = error.statusCode ?? 500;
     const message = statusCode === 500 ? 'Unexpected server error.' : error.message;
 
-    if (statusCode === 500) {
-      console.error(error);
-    }
+    logger[statusCode === 500 ? 'error' : 'warn']('http.error', {
+      requestId,
+      method: request.method,
+      path: requestPath,
+      statusCode,
+      error,
+    });
 
     sendError(response, statusCode, message, error.details);
   }
 });
 
 server.listen(PORT, HOST, () => {
+  logger.info('server.started', {
+    host: HOST,
+    port: PORT,
+    publicDir: PUBLIC_DIR,
+    metadataDir: METADATA_DIR,
+    kbStorageDir: KB_STORAGE_DIR,
+    bundleStorageDir: BUNDLE_STORAGE_DIR,
+  });
   console.log(`SUSE Support Bundle Analyzer is running at http://${HOST}:${PORT}`);
 });
 
