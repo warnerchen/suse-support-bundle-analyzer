@@ -63,6 +63,17 @@ KB_EMBEDDING_DIMENSIONS=1536 \
 npm run dev
 ```
 
+To also generate AI troubleshooting advice in completed reports, enable the advisor with the same Gemini API key:
+
+```bash
+AI_ADVISOR_PROVIDER=gemini \
+GEMINI_API_KEY='your-gemini-api-key' \
+GEMINI_ADVISOR_MODEL=gemini-2.0-flash \
+npm run dev
+```
+
+The advisor runs after product checks and KB enrichment. It receives a compact report context: product inventory, finding groups, key evidence, affected workloads, and related KB matches. It does not receive the full extracted bundle or full file index.
+
 For a production-like NFS setup, mount the NFS export first, then point the app at that mount path:
 
 ```bash
@@ -86,15 +97,18 @@ When `BUNDLE_STORAGE_DIR` is set, the directory must already exist and be readab
 | `KB_STORAGE_DIR` | `./data/kb` | KB index storage root |
 | `KB_EMBEDDING_PROVIDER` | `local-hash` | KB embedding provider: `local-hash` or `gemini` |
 | `KB_VECTOR_STORE` | `local-json` | KB vector store adapter; `local-json` is currently implemented |
+| `AI_ADVISOR_PROVIDER` | `off` | AI troubleshooting advisor provider: `off` or `gemini` |
 | `MAX_UPLOAD_BYTES` | `1073741824` | Upload size limit |
 | `MAX_ARCHIVE_ENTRIES` | `20000` | Maximum archive entries accepted |
 | `MAX_EXTRACTED_BYTES` | `2147483648` | Maximum extracted bundle size |
 | `MAX_REPORT_FILE_ENTRIES` | `5000` | File index entries kept in reports |
 | `KB_EMBEDDING_DIMENSIONS` | `256` local hash, `1536` Gemini | KB embedding vector dimensions |
-| `GEMINI_API_KEY` | empty | Gemini API key, required when `KB_EMBEDDING_PROVIDER=gemini` |
+| `GEMINI_API_KEY` | empty | Gemini API key, required when `KB_EMBEDDING_PROVIDER=gemini` or `AI_ADVISOR_PROVIDER=gemini` |
 | `GEMINI_EMBEDDING_MODEL` | `gemini-embedding-001` | Gemini embedding model id |
+| `GEMINI_ADVISOR_MODEL` | `gemini-2.0-flash` | Gemini model id for AI troubleshooting advice |
 | `GEMINI_API_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta` | Gemini API base URL |
 | `GEMINI_EMBEDDING_TIMEOUT_MS` | `30000` | Gemini embedding request timeout |
+| `GEMINI_ADVISOR_TIMEOUT_MS` | `45000` | Gemini advisor request timeout |
 | `KB_REMOTE_FETCH_TIMEOUT_MS` | `15000` | Remote KB fetch timeout |
 | `KB_REMOTE_IMPORT_LIMIT` | `80` | Maximum discovered URLs imported per URL request |
 | `KB_TEXT_IMPORT_MAX_BYTES` | `2097152` | Maximum remote or Markdown KB document size |
@@ -147,8 +161,11 @@ The app is intentionally small and modular:
 - `src/storage/nfsBundleStorage.js`: filesystem-backed bundle storage with optional NFS mount enforcement.
 - `src/repositories/*`: JSON-backed metadata repositories.
 - `src/analysis/archiveAnalyzer.js`: archive validation, safe extraction, file index generation, evidence file preview.
+- `src/analysis/productAnalyzers.js`: product analyzer registry that maps products to analyzer capabilities.
 - `src/analysis/longhornAnalyzer.js`: Longhorn inventory, version detection, findings, finding groups, log evidence references.
 - `src/analysis/harvesterAnalyzer.js`: Harvester inventory, version detection, findings, finding groups, log evidence references.
+- `src/ai/aiAdvisorService.js`: compact report context builder and AI advisor orchestration.
+- `src/ai/geminiAdvisorProvider.js`: Gemini REST `generateContent` provider for report-level troubleshooting advice.
 - `src/kb/kbService.js`: URL/Markdown KB preview, quality checks, import, source deletion, report enrichment.
 - `src/kb/kbStore.js`: KB source metadata orchestration and vector-store delegation.
 - `src/kb/localVectorStore.js`: local JSON-backed KB chunk/vector persistence and search.
@@ -159,6 +176,8 @@ The app is intentionally small and modular:
 - `public/*`: browser UI.
 
 The default KB embedding provider is `local-hash-v1`. It is useful for local development and deterministic tests, but it is not a semantic embedding model. Set `KB_EMBEDDING_PROVIDER=gemini` to embed KB chunks and KB search queries with Gemini. The local vector store is `local-json-v1`, configured through `KB_VECTOR_STORE=local-json`. The index metadata records embedding provider, model, dimensions, and vector-store adapter; when embedding values change, the app starts a fresh current index view so incompatible vectors are not mixed. Re-import KB sources after changing provider, model, or dimensions.
+
+AI troubleshooting advice is intentionally a separate layer. Product analyzers remain deterministic and produce structured findings, evidence, inventory, and correlations. KB enrichment attaches related article matches. When `AI_ADVISOR_PROVIDER=gemini` is enabled, the advisor uses that structured report context to explain likely causes, summarize KB coverage, and suggest next checks. If the advisor fails or times out, the original analysis report still completes and records the advisor error.
 
 ## Longhorn Analysis
 
@@ -392,6 +411,7 @@ grep '"event":"kb.import_urls.completed"' ./data/logs/app.log
 - Static file responses include security headers.
 - Support bundles and KB indexes are stored outside git by default.
 - Gemini embeddings send KB content and KB search/report-enrichment query text to Google's Gemini API when enabled.
+- Gemini advisor sends compact analysis context, extracted evidence snippets, and related KB match metadata to Google's Gemini API when `AI_ADVISOR_PROVIDER=gemini` is enabled.
 
 This project does not yet include authentication, authorization, multi-user tenancy, retention policies, or sensitive-data scanning.
 

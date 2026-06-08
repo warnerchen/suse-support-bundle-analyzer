@@ -12,6 +12,8 @@ const progressBar = document.querySelector('#progressBar');
 const submitButton = document.querySelector('#submitButton');
 const refreshButton = document.querySelector('#refreshButton');
 const bundleRows = document.querySelector('#bundleRows');
+const uploadPanel = document.querySelector('.upload-panel');
+const tablePanel = document.querySelector('.table-panel');
 const productOptions = document.querySelector('#productOptions');
 const dropZone = document.querySelector('#dropZone');
 const reportPanel = document.querySelector('#analysisReportPanel');
@@ -240,6 +242,22 @@ const TRANSLATIONS = {
     linkedFindings: ({ count }) => `${count} linked findings`,
     recommendedChecks: 'Recommended Checks',
     relatedKb: 'Related KB',
+    aiAdvisor: 'AI Advisor',
+    aiAdvisorSubtitle: 'Gemini-generated troubleshooting guidance',
+    aiAdvisorFailed: 'AI Advisor is unavailable for this report.',
+    aiSummary: 'Summary',
+    kbCoverage: 'KB Coverage',
+    suggestedActions: 'Suggested Actions',
+    confidence: 'Confidence',
+    priority: 'Priority',
+    followUpQuestions: 'Follow-up Questions',
+    advisorLimitations: 'Limitations',
+    high: 'high',
+    medium: 'medium',
+    low: 'low',
+    strong: 'strong',
+    partial: 'partial',
+    none: 'none',
     diagnostics: 'Diagnostics',
     findingDetails: 'Finding Details',
     findingSeveritySummary: 'Finding severity summary',
@@ -471,6 +489,22 @@ const TRANSLATIONS = {
     linkedFindings: ({ count }) => `${count} 个关联发现项`,
     recommendedChecks: '建议检查',
     relatedKb: '相关 KB',
+    aiAdvisor: 'AI 排障建议',
+    aiAdvisorSubtitle: 'Gemini 基于分析结果和 KB 匹配生成的建议',
+    aiAdvisorFailed: '当前报告无法生成 AI 建议。',
+    aiSummary: '总结',
+    kbCoverage: 'KB 覆盖度',
+    suggestedActions: '建议操作',
+    confidence: '置信度',
+    priority: '优先级',
+    followUpQuestions: '待确认问题',
+    advisorLimitations: '限制',
+    high: '高',
+    medium: '中',
+    low: '低',
+    strong: '强',
+    partial: '部分',
+    none: '无',
     diagnostics: '诊断',
     findingDetails: '发现项详情',
     findingSeveritySummary: '发现项严重性汇总',
@@ -532,6 +566,7 @@ const STATUS_LABELS = {
     'extracting archive': 'extracting archive',
     'indexing files': 'indexing files',
     'running product checks': 'running product checks',
+    'generating ai advice': 'generating AI advice',
   },
   'zh-CN': {
     uploaded: '已上传',
@@ -545,6 +580,7 @@ const STATUS_LABELS = {
     'extracting archive': '解压中',
     'indexing files': '索引文件中',
     'running product checks': '执行产品检查',
+    'generating ai advice': '生成 AI 建议中',
   },
 };
 const SEVERITY_LABELS = {
@@ -1037,6 +1073,8 @@ function bindEvents() {
   kbProductType.addEventListener('change', clearKbPreview);
   kbExpandLinks.addEventListener('change', clearKbPreview);
   kbSourceFilter.addEventListener('change', () => renderKbSources(kbSources));
+  window.addEventListener('resize', syncQueuePanelHeight);
+  observeUploadPanelHeight();
   kbPreviewPanel.addEventListener('click', (event) => {
     const previewTab = event.target.closest('[data-kb-preview-tab]');
 
@@ -1448,10 +1486,39 @@ function applyLanguage() {
   } else if (!reportContent.dataset.jobId) {
     clearReport();
   }
+
+  syncQueuePanelHeight();
 }
 
 function renderUploadLimit() {
   uploadLimit.textContent = maxUploadBytes ? t('limitLabel', { size: formatBytes(maxUploadBytes) }) : '';
+  syncQueuePanelHeight();
+}
+
+function observeUploadPanelHeight() {
+  if (!uploadPanel || typeof ResizeObserver !== 'function') {
+    return;
+  }
+
+  const resizeObserver = new ResizeObserver(() => {
+    syncQueuePanelHeight();
+  });
+  resizeObserver.observe(uploadPanel);
+}
+
+function syncQueuePanelHeight() {
+  if (!uploadPanel || !tablePanel) {
+    return;
+  }
+
+  if (window.matchMedia('(max-width: 900px)').matches) {
+    tablePanel.style.height = '';
+    return;
+  }
+
+  requestAnimationFrame(() => {
+    tablePanel.style.height = `${uploadPanel.offsetHeight}px`;
+  });
 }
 
 function updateSelectedFile({ clearFeedback = true } = {}) {
@@ -1462,6 +1529,8 @@ function updateSelectedFile({ clearFeedback = true } = {}) {
     setFormMessage('');
     setProgress(0);
   }
+
+  syncQueuePanelHeight();
 }
 
 function updateSelectedKbFiles({ clearPreviewPanel = true } = {}) {
@@ -2021,6 +2090,7 @@ async function refreshDashboard() {
 function renderBundles(bundles, analysisJobsByBundleId) {
   if (!bundles.length) {
     bundleRows.innerHTML = `<tr><td colspan="8" class="empty-cell">${escapeHtml(t('noUploadsYet'))}</td></tr>`;
+    syncQueuePanelHeight();
     return;
   }
 
@@ -2062,6 +2132,7 @@ function renderBundles(bundles, analysisJobsByBundleId) {
       `;
     })
     .join('');
+  syncQueuePanelHeight();
 }
 
 function renderKbStatus(kb = {}) {
@@ -2368,6 +2439,7 @@ function renderReport(report) {
       ${renderKbMetric(report.kbSummary)}
     </div>
 
+    ${renderAiAdvisor(report.aiAdvisor)}
     ${renderFindingGroups(report.findingGroups ?? [], groupSummary)}
     ${renderAffectedObjects(report)}
     ${renderFindings(report.findings ?? [], findingSummary, report.findingGroups?.length)}
@@ -2424,6 +2496,151 @@ function renderFindingGroups(groups, summary) {
       }
     </section>
   `;
+}
+
+function renderAiAdvisor(advisor) {
+  if (!advisor) {
+    return '';
+  }
+
+  const provider = [advisorProviderLabel(advisor.provider), advisor.model].filter(Boolean).join(' · ');
+
+  if (advisor.status === 'failed') {
+    return `
+      <section class="advisor-section advisor-failed" aria-labelledby="aiAdvisorTitle">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">${escapeHtml(t('aiAdvisorSubtitle'))}</p>
+            <h3 id="aiAdvisorTitle">${escapeHtml(t('aiAdvisor'))}</h3>
+          </div>
+          <span class="advisor-provider">${escapeHtml(provider || t('unknown'))}</span>
+        </div>
+        <p>${escapeHtml(t('aiAdvisorFailed'))}</p>
+      </section>
+    `;
+  }
+
+  if (advisor.status !== 'generated') {
+    return '';
+  }
+
+  const summary = localizedAdvisorText(advisor.summary);
+  const kbCoverage = localizedAdvisorText(advisor.kbCoverage);
+  const questions = localizedAdvisorList(advisor.questions);
+  const limitations = localizedAdvisorList(advisor.limitations);
+
+  return `
+    <section class="advisor-section" aria-labelledby="aiAdvisorTitle">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">${escapeHtml(t('aiAdvisorSubtitle'))}</p>
+          <h3 id="aiAdvisorTitle">${escapeHtml(t('aiAdvisor'))}</h3>
+        </div>
+        <span class="advisor-provider">${escapeHtml(provider)}</span>
+      </div>
+      <div class="advisor-summary-grid">
+        <div>
+          <h5>${escapeHtml(t('aiSummary'))}</h5>
+          <p>${escapeHtml(summary || t('noFindings'))}</p>
+        </div>
+        <div>
+          <h5>${escapeHtml(t('kbCoverage'))}</h5>
+          <p>
+            <span class="advisor-kb-status">${escapeHtml(t(advisor.kbCoverage?.status ?? 'none'))}</span>
+            ${escapeHtml(kbCoverage)}
+          </p>
+        </div>
+      </div>
+      ${renderAdvisorSuggestions(advisor.suggestions ?? [])}
+      ${renderAdvisorList(t('followUpQuestions'), questions)}
+      ${renderAdvisorList(t('advisorLimitations'), limitations)}
+    </section>
+  `;
+}
+
+function renderAdvisorSuggestions(suggestions) {
+  if (!suggestions.length) {
+    return '';
+  }
+
+  return `
+    <div class="advisor-suggestions">
+      <h5>${escapeHtml(t('suggestedActions'))}</h5>
+      <div class="advisor-suggestion-list">
+        ${suggestions.map(renderAdvisorSuggestion).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function renderAdvisorSuggestion(suggestion) {
+  const title = localizedAdvisorText(suggestion.title);
+  const rationale = localizedAdvisorText(suggestion.rationale);
+  const actions = localizedAdvisorList(suggestion.actions);
+
+  return `
+    <article class="advisor-card advisor-${escapeHtml(suggestion.priority ?? 'medium')}">
+      <div class="advisor-card-header">
+        <strong>${escapeHtml(title)}</strong>
+        <span>
+          ${escapeHtml(t('priority'))}: ${escapeHtml(t(suggestion.priority ?? 'medium'))}
+          · ${escapeHtml(t('confidence'))}: ${escapeHtml(t(suggestion.confidence ?? 'medium'))}
+        </span>
+      </div>
+      <p>${escapeHtml(rationale)}</p>
+      ${actions.length ? `<ol>${actions.map((action) => `<li>${escapeHtml(action)}</li>`).join('')}</ol>` : ''}
+      ${renderAdvisorEvidence(suggestion.evidence, suggestion.relatedKbTitles)}
+    </article>
+  `;
+}
+
+function renderAdvisorEvidence(evidence = [], relatedKbTitles = []) {
+  const entries = [
+    ...evidence.map((item) => ({ label: t('evidence'), value: item })),
+    ...relatedKbTitles.map((item) => ({ label: t('relatedKb'), value: item })),
+  ].filter((entry) => entry.value);
+
+  if (!entries.length) {
+    return '';
+  }
+
+  return `
+    <div class="advisor-evidence">
+      ${entries
+        .map(
+          (entry) => `
+            <span>
+              <small>${escapeHtml(entry.label)}</small>
+              ${escapeHtml(entry.value)}
+            </span>
+          `,
+        )
+        .join('')}
+    </div>
+  `;
+}
+
+function renderAdvisorList(title, items) {
+  if (!items.length) {
+    return '';
+  }
+
+  return `
+    <div class="advisor-list">
+      <h5>${escapeHtml(title)}</h5>
+      <ul>
+        ${items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}
+      </ul>
+    </div>
+  `;
+}
+
+function advisorProviderLabel(provider) {
+  if (String(provider ?? '').toLowerCase() === 'gemini') {
+    return 'Gemini';
+  }
+
+  return provider ?? '';
 }
 
 function renderAffectedObjects(report) {
@@ -3111,6 +3328,31 @@ function categoryLabel(category) {
   return CATEGORY_LABELS[currentLanguage]?.[category] ?? category ?? '';
 }
 
+function localizedAdvisorText(value) {
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  if (currentLanguage === 'zh-CN') {
+    return value?.zhCN ?? value?.['zh-CN'] ?? value?.en ?? '';
+  }
+
+  return value?.en ?? value?.zhCN ?? value?.['zh-CN'] ?? '';
+}
+
+function localizedAdvisorList(value) {
+  if (!value) {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  const list = currentLanguage === 'zh-CN' ? value.zhCN ?? value['zh-CN'] ?? value.en : value.en ?? value.zhCN;
+  return Array.isArray(list) ? list : [];
+}
+
 function localizeFindingGroup(group) {
   return {
     ...group,
@@ -3283,6 +3525,8 @@ function setFormMessage(message, state) {
   if (state) {
     formMessage.classList.add(state);
   }
+
+  syncQueuePanelHeight();
 }
 
 function setKbMessage(message, state) {

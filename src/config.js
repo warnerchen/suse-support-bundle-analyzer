@@ -23,6 +23,7 @@ export const KB_STORAGE_DIR = process.env.KB_STORAGE_DIR
   : path.join(DATA_DIR, 'kb');
 export const KB_EMBEDDING_PROVIDER = normalizeEmbeddingProvider(process.env.KB_EMBEDDING_PROVIDER);
 export const KB_VECTOR_STORE = normalizeVectorStore(process.env.KB_VECTOR_STORE);
+export const AI_ADVISOR_PROVIDER = normalizeAiAdvisorProvider(process.env.AI_ADVISOR_PROVIDER);
 
 export const PORT = Number.parseInt(process.env.PORT ?? '3000', 10);
 export const HOST = process.env.HOST ?? '127.0.0.1';
@@ -50,10 +51,15 @@ export const KB_EMBEDDING_DIMENSIONS = Number.parseInt(
 );
 export const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? '';
 export const GEMINI_EMBEDDING_MODEL = process.env.GEMINI_EMBEDDING_MODEL ?? 'gemini-embedding-001';
+export const GEMINI_ADVISOR_MODEL = process.env.GEMINI_ADVISOR_MODEL ?? 'gemini-2.0-flash';
 export const GEMINI_API_BASE_URL =
   process.env.GEMINI_API_BASE_URL ?? 'https://generativelanguage.googleapis.com/v1beta';
 export const GEMINI_EMBEDDING_TIMEOUT_MS = Number.parseInt(
   process.env.GEMINI_EMBEDDING_TIMEOUT_MS ?? '30000',
+  10,
+);
+export const GEMINI_ADVISOR_TIMEOUT_MS = Number.parseInt(
+  process.env.GEMINI_ADVISOR_TIMEOUT_MS ?? '45000',
   10,
 );
 export const KB_REMOTE_FETCH_TIMEOUT_MS = Number.parseInt(
@@ -123,6 +129,20 @@ function normalizeVectorStore(value) {
   }
 
   throw new Error(`Unsupported KB vector store: ${value}`);
+}
+
+function normalizeAiAdvisorProvider(value) {
+  const provider = String(value ?? 'off').trim().toLowerCase();
+
+  if (provider === 'off' || provider === 'none' || provider === 'disabled') {
+    return 'off';
+  }
+
+  if (provider === 'gemini') {
+    return provider;
+  }
+
+  throw new Error(`Unsupported AI advisor provider: ${value}`);
 }
 
 function normalizeLogLevel(value) {

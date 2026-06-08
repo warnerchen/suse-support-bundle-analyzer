@@ -10,11 +10,10 @@ import {
   MAX_REPORT_FILE_ENTRIES,
 } from '../config.js';
 import {
-  analyzeHarvesterSupportBundle,
-  buildHarvesterWorkloadCorrelations,
-  detectHarvesterVersion,
-} from './harvesterAnalyzer.js';
-import { analyzeLonghornSupportBundle, detectLonghornVersion } from './longhornAnalyzer.js';
+  emptyProductAnalysis,
+  getProductAnalyzer,
+  productAnalyzerDescriptor,
+} from './productAnalyzers.js';
 
 const execFileAsync = promisify(execFile);
 const FILE_PREVIEW_MAX_BYTES = 512 * 1024;
@@ -22,8 +21,9 @@ const FILE_PREVIEW_CONTEXT_LINES = 80;
 const FILE_PREVIEW_MAX_LINE_WINDOW = 220;
 
 export class ArchiveAnalyzer {
-  constructor({ workDir }) {
+  constructor({ workDir, productAnalyzers = { get: getProductAnalyzer } }) {
     this.workDir = workDir;
+    this.productAnalyzers = productAnalyzers;
   }
 
   async deleteWorkDir(jobId) {
@@ -61,11 +61,10 @@ export class ArchiveAnalyzer {
     }
 
     await updateStage('running product checks');
-    const productAnalysis = await analyzeProductBundle({
-      productType: bundle.productType,
-      extractDir,
-      index,
-    });
+    const productAnalyzer = this.#getProductAnalyzer(bundle.productType);
+    const productAnalysis = productAnalyzer
+      ? await productAnalyzer.analyze({ extractDir, index })
+      : emptyProductAnalysis();
 
     return {
       jobId,
@@ -81,6 +80,7 @@ export class ArchiveAnalyzer {
         storageRelativePath: bundle.storageRelativePath,
       },
       summary,
+      analyzer: productAnalyzerDescriptor(productAnalyzer),
       inventory: productAnalysis.inventory,
       correlations: productAnalysis.correlations ?? {},
       groupSummary: productAnalysis.groupSummary,
@@ -179,54 +179,16 @@ export class ArchiveAnalyzer {
   }
 
   async enrichExistingReport(report) {
-    if (!['longhorn', 'harvester'].includes(report.productType)) {
-      return report;
-    }
+    const productAnalyzer = this.#getProductAnalyzer(report.productType);
 
-    const needsVersion = !report.inventory?.[report.productType]?.version;
-    const needsHarvesterCorrelations =
-      report.productType === 'harvester' && !report.correlations?.harvesterWorkloads;
-
-    if (!needsVersion && !needsHarvesterCorrelations) {
+    if (!productAnalyzer || typeof productAnalyzer.enrichExistingReport !== 'function') {
       return report;
     }
 
     try {
       const extractDir = path.join(this.workDir, report.jobId, 'extracted');
       const index = await buildFileIndex(extractDir);
-      let nextReport = report;
-
-      if (needsVersion) {
-        const version =
-          report.productType === 'harvester'
-            ? await detectHarvesterVersion({ extractDir, index })
-            : await detectLonghornVersion({ extractDir, index });
-
-        if (version) {
-          nextReport = {
-            ...nextReport,
-            inventory: {
-              ...(nextReport.inventory ?? {}),
-              [report.productType]: {
-                ...(nextReport.inventory?.[report.productType] ?? {}),
-                version,
-              },
-            },
-          };
-        }
-      }
-
-      if (needsHarvesterCorrelations) {
-        nextReport = {
-          ...nextReport,
-          correlations: await buildHarvesterWorkloadCorrelations(
-            { extractDir, index },
-            { findings: nextReport.findings ?? [] },
-          ),
-        };
-      }
-
-      return nextReport;
+      return productAnalyzer.enrichExistingReport(report, { extractDir, index });
     } catch (error) {
       if (error.code === 'ENOENT') {
         return report;
@@ -235,34 +197,14 @@ export class ArchiveAnalyzer {
       throw error;
     }
   }
-}
 
-async function analyzeProductBundle({ productType, extractDir, index }) {
-  if (productType === 'longhorn') {
-    return analyzeLonghornSupportBundle({ extractDir, index });
+  #getProductAnalyzer(productType) {
+    if (typeof this.productAnalyzers?.get === 'function') {
+      return this.productAnalyzers.get(productType);
+    }
+
+    return getProductAnalyzer(productType);
   }
-
-  if (productType === 'harvester') {
-    return analyzeHarvesterSupportBundle({ extractDir, index });
-  }
-
-  return {
-    inventory: {},
-    groupSummary: {
-      total: 0,
-      critical: 0,
-      warning: 0,
-      info: 0,
-    },
-    findingGroups: [],
-    findingSummary: {
-      total: 0,
-      critical: 0,
-      warning: 0,
-      info: 0,
-    },
-    findings: [],
-  };
 }
 
 function normalizePreviewPath(reportPath) {

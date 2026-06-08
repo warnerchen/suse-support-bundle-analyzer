@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import http from 'node:http';
+import { createAiAdvisorService } from './ai/advisorFactory.js';
 import { ArchiveAnalyzer } from './analysis/archiveAnalyzer.js';
 import {
   ANALYSIS_WORK_DIR,
@@ -49,6 +50,9 @@ const kbService = new KbService({
   store: kbStore,
   logger: logger.child({ component: 'kb-service' }),
 });
+const aiAdvisorService = createAiAdvisorService({
+  logger: logger.child({ component: 'ai-advisor' }),
+});
 const analysisService = new AnalysisService({
   analyzer: new ArchiveAnalyzer({ workDir: ANALYSIS_WORK_DIR }),
   bundleRepository: repository,
@@ -56,6 +60,7 @@ const analysisService = new AnalysisService({
   reportRepository: new AnalysisReportRepository(METADATA_DIR),
   storage,
   kbService,
+  aiAdvisorService,
   logger: logger.child({ component: 'analysis-service' }),
 });
 
@@ -340,6 +345,7 @@ server.listen(PORT, HOST, () => {
     metadataDir: METADATA_DIR,
     kbStorageDir: KB_STORAGE_DIR,
     bundleStorageDir: BUNDLE_STORAGE_DIR,
+    aiAdvisorProvider: aiAdvisorService?.descriptor?.provider ?? 'off',
   });
   console.log(`SUSE Support Bundle Analyzer is running at http://${HOST}:${PORT}`);
 });

@@ -1,13 +1,23 @@
 import crypto from 'node:crypto';
 
 export class AnalysisService {
-  constructor({ analyzer, bundleRepository, jobRepository, reportRepository, storage, kbService = null, logger = null }) {
+  constructor({
+    analyzer,
+    bundleRepository,
+    jobRepository,
+    reportRepository,
+    storage,
+    kbService = null,
+    aiAdvisorService = null,
+    logger = null,
+  }) {
     this.analyzer = analyzer;
     this.bundleRepository = bundleRepository;
     this.jobRepository = jobRepository;
     this.reportRepository = reportRepository;
     this.storage = storage;
     this.kbService = kbService;
+    this.aiAdvisorService = aiAdvisorService;
     this.logger = logger;
     this.pendingJobIds = [];
     this.processing = false;
@@ -59,7 +69,8 @@ export class AnalysisService {
       report = await this.analyzer.enrichExistingReport(report);
     }
 
-    return this.#enrichReport(report);
+    const enrichedReport = await this.#enrichReport(report);
+    return this.#adviseStoredReport(enrichedReport);
   }
 
   async getExtractedFile(jobId, { reportPath, lineStart = null, lineEnd = null, matchText = '' } = {}) {
@@ -196,22 +207,24 @@ export class AnalysisService {
         },
       });
       const enrichedReport = await this.#enrichReport(report);
+      const finalReport = await this.#adviseReport(enrichedReport, existingJob);
 
-      await this.reportRepository.save(jobId, enrichedReport);
+      await this.reportRepository.save(jobId, finalReport);
       await this.jobRepository.update(jobId, {
         status: 'completed',
         stage: 'completed',
         completedAt: new Date().toISOString(),
         reportAvailable: true,
-        summary: enrichedReport.summary,
+        summary: finalReport.summary,
       });
       this.logger?.info('analysis.completed', {
         jobId,
         bundleId: existingJob.bundleId,
         productType: existingJob.productType,
         durationMs: Date.now() - startedAt,
-        findingCount: enrichedReport.findings?.length ?? 0,
-        findingGroupCount: enrichedReport.findingGroups?.length ?? 0,
+        findingCount: finalReport.findings?.length ?? 0,
+        findingGroupCount: finalReport.findingGroups?.length ?? 0,
+        aiAdvisorStatus: finalReport.aiAdvisor?.status,
       });
     } catch (error) {
       await this.jobRepository.update(jobId, {
@@ -251,5 +264,93 @@ export class AnalysisService {
         },
       };
     }
+  }
+
+  async #adviseReport(report, job) {
+    if (!this.aiAdvisorService) {
+      return report;
+    }
+
+    try {
+      await this.jobRepository.update(job.id, { stage: 'generating ai advice' });
+      this.logger?.debug('analysis.stage', { jobId: job.id, stage: 'generating ai advice' });
+      return await this.aiAdvisorService.adviseReport(report);
+    } catch (error) {
+      const descriptor = this.aiAdvisorService.descriptor ?? {};
+
+      this.logger?.warn('analysis.ai_advisor_failed', {
+        jobId: job.id,
+        bundleId: job.bundleId,
+        productType: job.productType,
+        provider: descriptor.provider,
+        model: descriptor.model,
+        error,
+      });
+
+      return {
+        ...report,
+        aiAdvisor: {
+          enabled: false,
+          status: 'failed',
+          generatedAt: new Date().toISOString(),
+          provider: descriptor.provider ?? 'unknown',
+          model: descriptor.model,
+          errorMessage: error.message,
+        },
+      };
+    }
+  }
+
+  async #adviseStoredReport(report) {
+    if (!this.aiAdvisorService || !this.#needsAiAdvice(report)) {
+      return report;
+    }
+
+    const job = await this.jobRepository.findById(report.jobId);
+
+    if (!job || job.status !== 'completed') {
+      return report;
+    }
+
+    try {
+      const advisedReport = await this.aiAdvisorService.adviseReport(report);
+      await this.reportRepository.save(report.jobId, advisedReport);
+      return advisedReport;
+    } catch (error) {
+      const descriptor = this.aiAdvisorService.descriptor ?? {};
+      const failedReport = {
+        ...report,
+        aiAdvisor: {
+          enabled: false,
+          status: 'failed',
+          generatedAt: new Date().toISOString(),
+          provider: descriptor.provider ?? 'unknown',
+          model: descriptor.model,
+          errorMessage: error.message,
+        },
+      };
+
+      this.logger?.warn('analysis.ai_advisor_lazy_failed', {
+        jobId: report.jobId,
+        bundleId: report.bundleId,
+        productType: report.productType,
+        provider: descriptor.provider,
+        model: descriptor.model,
+        error,
+      });
+      await this.reportRepository.save(report.jobId, failedReport);
+      return failedReport;
+    }
+  }
+
+  #needsAiAdvice(report) {
+    const descriptor = this.aiAdvisorService?.descriptor ?? {};
+    const advisor = report?.aiAdvisor;
+
+    return (
+      advisor?.status !== 'generated' ||
+      advisor?.provider !== descriptor.provider ||
+      advisor?.model !== descriptor.model
+    );
   }
 }
