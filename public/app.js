@@ -242,8 +242,9 @@ const TRANSLATIONS = {
     linkedFindings: ({ count }) => `${count} linked findings`,
     recommendedChecks: 'Recommended Checks',
     relatedKb: 'Related KB',
-    aiAdvisor: 'AI Advisor',
-    aiAdvisorSubtitle: 'Gemini-generated troubleshooting guidance',
+    aiAdvisor: 'Smart Troubleshooting Guidance',
+    aiAdvisorSubtitle: 'AI Advisor',
+    aiAdvisorDescription: 'Generated from bundle evidence and related KB matches for investigation reference.',
     aiAdvisorFailed: 'AI Advisor is unavailable for this report.',
     aiSummary: 'Summary',
     kbCoverage: 'KB Coverage',
@@ -489,8 +490,9 @@ const TRANSLATIONS = {
     linkedFindings: ({ count }) => `${count} 个关联发现项`,
     recommendedChecks: '建议检查',
     relatedKb: '相关 KB',
-    aiAdvisor: 'AI 排障建议',
-    aiAdvisorSubtitle: 'Gemini 基于分析结果和 KB 匹配生成的建议',
+    aiAdvisor: '智能排障建议',
+    aiAdvisorSubtitle: 'AI Advisor',
+    aiAdvisorDescription: '基于 Bundle 证据与 KB 匹配结果生成，供排查时参考。',
     aiAdvisorFailed: '当前报告无法生成 AI 建议。',
     aiSummary: '总结',
     kbCoverage: 'KB 覆盖度',
@@ -2510,8 +2512,9 @@ function renderAiAdvisor(advisor) {
       <section class="advisor-section advisor-failed" aria-labelledby="aiAdvisorTitle">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">${escapeHtml(t('aiAdvisorSubtitle'))}</p>
+            <span class="advisor-pill">${escapeHtml(t('aiAdvisorSubtitle'))}</span>
             <h3 id="aiAdvisorTitle">${escapeHtml(t('aiAdvisor'))}</h3>
+            <p class="advisor-description">${escapeHtml(t('aiAdvisorDescription'))}</p>
           </div>
           <span class="advisor-provider">${escapeHtml(provider || t('unknown'))}</span>
         </div>
@@ -2533,8 +2536,9 @@ function renderAiAdvisor(advisor) {
     <section class="advisor-section" aria-labelledby="aiAdvisorTitle">
       <div class="section-heading">
         <div>
-          <p class="eyebrow">${escapeHtml(t('aiAdvisorSubtitle'))}</p>
+          <span class="advisor-pill">${escapeHtml(t('aiAdvisorSubtitle'))}</span>
           <h3 id="aiAdvisorTitle">${escapeHtml(t('aiAdvisor'))}</h3>
+          <p class="advisor-description">${escapeHtml(t('aiAdvisorDescription'))}</p>
         </div>
         <span class="advisor-provider">${escapeHtml(provider)}</span>
       </div>

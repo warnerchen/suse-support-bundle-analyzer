@@ -1682,7 +1682,7 @@ td:nth-child(8) {
   border: 1px solid #cfded6;
   border-radius: 8px;
   background: linear-gradient(180deg, #fbfcfb 0%, #ffffff 100%);
-  padding: 28px 16px 16px;
+  padding: 20px 16px 16px;
 }
 
 .advisor-section.advisor-failed {
@@ -1695,16 +1695,34 @@ td:nth-child(8) {
 }
 
 .advisor-section .section-heading > div {
-  padding-top: 4px;
-}
-
-.advisor-section .eyebrow {
-  margin-bottom: 8px;
-  text-transform: none;
+  padding-top: 0;
 }
 
 .advisor-section h3 {
+  margin-top: 14px;
   margin-bottom: 0;
+}
+
+.advisor-pill {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  border-radius: 999px;
+  background: #eaf6f0;
+  color: var(--green-dark);
+  font-size: 0.78rem;
+  font-weight: 850;
+  line-height: 1;
+  padding: 5px 12px;
+}
+
+.advisor-section .advisor-description {
+  max-width: 640px;
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 650;
+  line-height: 1.4;
 }
 
 .advisor-provider {
