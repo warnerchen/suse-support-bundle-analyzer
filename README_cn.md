@@ -17,15 +17,15 @@ SUSE Support Bundle Analyzer 是一个面向技术支持场景的本地 Web 工�
 
 ### 上传 Bundle 并查看分析结果
 
-<video src="docs/assets/videos/support-bundle-analysis-demo.mov" controls width="100%"></video>
+<video src="docs/assets/videos/support-bundle-analysis-demo.mp4" controls width="100%"></video>
 
-[直接打开视频](docs/assets/videos/support-bundle-analysis-demo.mov)
+[直接打开视频](docs/assets/videos/support-bundle-analysis-demo.mp4)
 
 ### 导入 KB 并构建向量索引
 
-<video src="docs/assets/videos/kb-vector-index-demo.mov" controls width="100%"></video>
+<video src="docs/assets/videos/kb-vector-index-demo.mp4" controls width="100%"></video>
 
-[直接打开视频](docs/assets/videos/kb-vector-index-demo.mov)
+[直接打开视频](docs/assets/videos/kb-vector-index-demo.mp4)
 
 ## 本地运行
 
