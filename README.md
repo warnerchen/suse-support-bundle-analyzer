@@ -17,15 +17,15 @@ SUSE Support Bundle Analyzer is a local web application for technical support wo
 
 ### Upload a Bundle and Review Analysis Results
 
-<video src="docs/assets/videos/support-bundle-analysis-demo.mp4" controls width="100%"></video>
+![Upload a bundle and review analysis results](docs/assets/videos/support-bundle-analysis-demo.gif)
 
-[Open video directly](docs/assets/videos/support-bundle-analysis-demo.mp4)
+[Open MP4 video](docs/assets/videos/support-bundle-analysis-demo.mp4)
 
 ### Import KB and Build the Vector Index
 
-<video src="docs/assets/videos/kb-vector-index-demo.mp4" controls width="100%"></video>
+![Import KB and build the vector index](docs/assets/videos/kb-vector-index-demo.gif)
 
-[Open video directly](docs/assets/videos/kb-vector-index-demo.mp4)
+[Open MP4 video](docs/assets/videos/kb-vector-index-demo.mp4)
 
 ## Run Locally
 
