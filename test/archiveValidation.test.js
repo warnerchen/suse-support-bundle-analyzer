@@ -12,6 +12,8 @@ test('accepts common support bundle archive suffixes', () => {
 
 test('rejects unsupported upload suffixes', () => {
   assert.equal(hasAllowedArchiveSuffix('notes.txt'), false);
+  assert.equal(hasAllowedArchiveSuffix('support-bundle.gz'), false);
+  assert.equal(hasAllowedArchiveSuffix('support-bundle.zst'), false);
   assert.equal(hasAllowedArchiveSuffix('bundle.zip.exe'), false);
 });
 

@@ -2,6 +2,7 @@ import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import readline from 'node:readline';
 import {
@@ -48,13 +49,21 @@ export class ArchiveAnalyzer {
     validateArchiveEntries(archiveEntries);
 
     await updateStage('extracting archive');
-    await extractArchive(archivePath, archiveType, extractDir);
+    try {
+      await extractArchive(archivePath, archiveType, extractDir, {
+        maxExtractedBytes: MAX_EXTRACTED_BYTES,
+      });
+    } catch (error) {
+      await fs.rm(extractDir, { recursive: true, force: true });
+      throw error;
+    }
 
     await updateStage('indexing files');
     const index = await buildFileIndex(extractDir);
     const summary = summarizeFileIndex(index);
 
     if (summary.totalBytes > MAX_EXTRACTED_BYTES) {
+      await fs.rm(extractDir, { recursive: true, force: true });
       throw new Error(
         `Extracted data is larger than the configured limit of ${MAX_EXTRACTED_BYTES} bytes.`,
       );
@@ -462,14 +471,20 @@ export function validateArchiveEntryPath(entryPath) {
   }
 }
 
-async function extractArchive(archivePath, archiveType, extractDir) {
+async function extractArchive(archivePath, archiveType, extractDir, { maxExtractedBytes } = {}) {
   if (archiveType === 'zip') {
-    await runCommand('unzip', ['-q', archivePath, '-d', extractDir]);
+    await runCommandWithDirectoryQuota('unzip', ['-q', archivePath, '-d', extractDir], {
+      directory: extractDir,
+      maxBytes: maxExtractedBytes,
+    });
     return;
   }
 
   if (archiveType === 'tar') {
-    await runCommand('tar', ['-xf', archivePath, '-C', extractDir]);
+    await runCommandWithDirectoryQuota('tar', ['-xf', archivePath, '-C', extractDir], {
+      directory: extractDir,
+      maxBytes: maxExtractedBytes,
+    });
     return;
   }
 
@@ -564,6 +579,87 @@ function largestFiles(index, limit) {
     }));
 }
 
+async function runCommandWithDirectoryQuota(command, args, { directory, maxBytes }) {
+  if (!Number.isFinite(maxBytes) || maxBytes <= 0) {
+    return runCommand(command, args);
+  }
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    let quotaExceeded = false;
+    let quotaCheckRunning = false;
+    let killTimer = null;
+
+    const monitor = setInterval(async () => {
+      if (quotaCheckRunning) {
+        return;
+      }
+
+      quotaCheckRunning = true;
+
+      try {
+        const totalBytes = await directorySize(directory);
+
+        if (totalBytes > maxBytes && !quotaExceeded) {
+          quotaExceeded = true;
+          child.kill('SIGTERM');
+          killTimer = setTimeout(() => child.kill('SIGKILL'), 1000);
+          killTimer.unref?.();
+        }
+      } catch {
+        // The extraction command may be creating or removing directories while
+        // the monitor walks them. A later pass or the final index check will
+        // catch the actual size.
+      } finally {
+        quotaCheckRunning = false;
+      }
+    }, 500);
+    monitor.unref?.();
+
+    child.stdout.on('data', (chunk) => {
+      stdout = appendCommandOutput(stdout, chunk);
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr = appendCommandOutput(stderr, chunk);
+    });
+    child.on('error', (error) => {
+      clearInterval(monitor);
+      clearTimeout(killTimer);
+      reject(new Error(`Failed to run ${command}. ${error.message}`.trim()));
+    });
+    child.on('close', (code, signal) => {
+      clearInterval(monitor);
+      clearTimeout(killTimer);
+
+      if (quotaExceeded) {
+        reject(new Error(`Extracted data is larger than the configured limit of ${maxBytes} bytes.`));
+        return;
+      }
+
+      if (code !== 0) {
+        const suffix = stderr ? ` ${stderr}` : signal ? ` Process ended with signal ${signal}.` : '';
+        reject(new Error(`Failed to run ${command}.${suffix}`.trim()));
+        return;
+      }
+
+      directorySize(directory)
+        .then((totalBytes) => {
+          if (totalBytes > maxBytes) {
+            reject(new Error(`Extracted data is larger than the configured limit of ${maxBytes} bytes.`));
+            return;
+          }
+
+          resolve({ stdout, stderr });
+        })
+        .catch(reject);
+    });
+  });
+}
+
 async function runCommand(command, args) {
   try {
     return await execFileAsync(command, args, {
@@ -574,4 +670,59 @@ async function runCommand(command, args) {
     const stderr = error.stderr ? ` ${error.stderr}` : '';
     throw new Error(`Failed to run ${command}.${stderr}`.trim());
   }
+}
+
+async function directorySize(rootDir) {
+  let total = 0;
+
+  async function walk(currentDir) {
+    let children;
+
+    try {
+      children = await fs.readdir(currentDir, { withFileTypes: true });
+    } catch (error) {
+      if (error.code === 'ENOENT' || error.code === 'ENOTDIR') {
+        return;
+      }
+
+      throw error;
+    }
+
+    for (const child of children) {
+      const absolutePath = path.join(currentDir, child.name);
+
+      let stats;
+
+      try {
+        stats = await fs.lstat(absolutePath);
+      } catch (error) {
+        if (error.code === 'ENOENT') {
+          continue;
+        }
+
+        throw error;
+      }
+
+      if (stats.isSymbolicLink()) {
+        continue;
+      }
+
+      if (stats.isDirectory()) {
+        await walk(absolutePath);
+        continue;
+      }
+
+      if (stats.isFile()) {
+        total += stats.size;
+      }
+    }
+  }
+
+  await walk(rootDir);
+  return total;
+}
+
+function appendCommandOutput(output, chunk) {
+  const next = output + chunk.toString();
+  return next.length > 20 * 1024 ? next.slice(-20 * 1024) : next;
 }

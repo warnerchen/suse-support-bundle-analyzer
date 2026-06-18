@@ -118,3 +118,77 @@ test('getReport reuses existing generated AI advice for the same provider model'
   assert.equal(adviseCalls, 0);
   assert.equal(report.aiAdvisor.status, 'generated');
 });
+
+test('getReport regenerates AI advice when the report context fingerprint changes', async () => {
+  let adviseCalls = 0;
+  const service = new AnalysisService({
+    analyzer: {},
+    bundleRepository: {},
+    storage: {},
+    jobRepository: {
+      async findById(id) {
+        return { id, status: 'completed' };
+      },
+    },
+    reportRepository: {
+      async findByJobId() {
+        return {
+          jobId: 'job-1',
+          bundleId: 'bundle-1',
+          productType: 'longhorn',
+          findingGroups: [],
+          findings: [],
+          aiAdvisor: {
+            status: 'generated',
+            provider: 'gemini',
+            model: 'models/gemini-2.0-flash',
+            promptVersion: 'support-advisor-v1',
+            contextFingerprint: 'old-context',
+            suggestions: [],
+          },
+        };
+      },
+      async save() {},
+    },
+    kbService: {
+      async enrichReport(report) {
+        return {
+          ...report,
+          kbSummary: {
+            enabled: true,
+            documentCount: 2,
+          },
+        };
+      },
+    },
+    aiAdvisorService: {
+      descriptor: {
+        provider: 'gemini',
+        model: 'models/gemini-2.0-flash',
+        promptVersion: 'support-advisor-v1',
+      },
+      fingerprintReport(report) {
+        return `kb-docs-${report.kbSummary?.documentCount ?? 0}`;
+      },
+      async adviseReport(report) {
+        adviseCalls += 1;
+        return {
+          ...report,
+          aiAdvisor: {
+            status: 'generated',
+            provider: 'gemini',
+            model: 'models/gemini-2.0-flash',
+            promptVersion: 'support-advisor-v1',
+            contextFingerprint: this.fingerprintReport(report),
+            suggestions: [],
+          },
+        };
+      },
+    },
+  });
+
+  const report = await service.getReport('job-1');
+
+  assert.equal(adviseCalls, 1);
+  assert.equal(report.aiAdvisor.contextFingerprint, 'kb-docs-2');
+});

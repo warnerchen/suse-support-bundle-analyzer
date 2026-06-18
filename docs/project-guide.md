@@ -272,9 +272,8 @@ Supported archive suffixes:
 - `.tar.bz2`
 - `.tbz2`
 - `.tar.zst`
-- `.gz`
 
-If a bundle with the same product type and SHA-256 checksum already exists, the API returns `409` with `details.code` set to `duplicate_bundle` and the existing bundle summary in `details.existingBundle`.
+If a bundle with the same SHA-256 checksum already exists, the API returns `409` with `details.code` set to `duplicate_bundle` and the existing bundle summary in `details.existingBundle`.
 
 ### `GET /api/bundles`
 

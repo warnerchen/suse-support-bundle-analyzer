@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { cosineSimilarity } from './localEmbeddingProvider.js';
@@ -10,6 +11,7 @@ export class LocalVectorStore {
     this.indexPath = path.join(storageDir, VECTOR_INDEX_FILENAME);
     this.state = null;
     this.embedding = null;
+    this.writeQueue = Promise.resolve();
   }
 
   get descriptor() {
@@ -25,6 +27,7 @@ export class LocalVectorStore {
   }
 
   async getStats() {
+    await this.#waitForWrites();
     const state = await this.#loadState();
 
     return {
@@ -36,67 +39,75 @@ export class LocalVectorStore {
   }
 
   async isEmpty() {
+    await this.#waitForWrites();
     const state = await this.#loadState();
     return state.chunks.length === 0;
   }
 
   async replaceAllChunks(chunks) {
-    const state = await this.#loadState();
-    state.chunks = [...chunks];
-    state.updatedAt = new Date().toISOString();
-    state.embedding = this.embedding;
-    state.vectorStore = this.descriptor;
-    await this.#saveState(state);
+    return this.#serialize(async () => {
+      const state = await this.#loadState();
+      state.chunks = [...chunks];
+      state.updatedAt = new Date().toISOString();
+      state.embedding = this.embedding;
+      state.vectorStore = this.descriptor;
+      await this.#saveState(state);
 
-    return state.chunks.length;
+      return state.chunks.length;
+    });
   }
 
   async upsertDocumentChunks(documentId, chunks) {
-    const state = await this.#loadState();
-    const normalizedDocumentId = String(documentId ?? '').trim();
-    const before = state.chunks.length;
+    return this.#serialize(async () => {
+      const state = await this.#loadState();
+      const normalizedDocumentId = String(documentId ?? '').trim();
+      const before = state.chunks.length;
 
-    state.chunks = state.chunks.filter((chunk) => chunk.documentId !== normalizedDocumentId);
-    state.chunks.push(...chunks);
-    state.updatedAt = new Date().toISOString();
-    state.embedding = this.embedding;
-    state.vectorStore = this.descriptor;
-    await this.#saveState(state);
+      state.chunks = state.chunks.filter((chunk) => chunk.documentId !== normalizedDocumentId);
+      state.chunks.push(...chunks);
+      state.updatedAt = new Date().toISOString();
+      state.embedding = this.embedding;
+      state.vectorStore = this.descriptor;
+      await this.#saveState(state);
 
-    return {
-      removedChunks: before - (state.chunks.length - chunks.length),
-      indexedChunks: chunks.length,
-      totalChunks: state.chunks.length,
-      updatedAt: state.updatedAt,
-    };
-  }
-
-  async deleteDocumentChunks(documentId) {
-    const state = await this.#loadState();
-    const normalizedDocumentId = String(documentId ?? '').trim();
-    const chunksBefore = state.chunks.length;
-
-    state.chunks = state.chunks.filter((chunk) => chunk.documentId !== normalizedDocumentId);
-
-    if (state.chunks.length === chunksBefore) {
       return {
-        removedChunks: 0,
+        removedChunks: before - (state.chunks.length - chunks.length),
+        indexedChunks: chunks.length,
         totalChunks: state.chunks.length,
         updatedAt: state.updatedAt,
       };
-    }
+    });
+  }
 
-    state.updatedAt = new Date().toISOString();
-    await this.#saveState(state);
+  async deleteDocumentChunks(documentId) {
+    return this.#serialize(async () => {
+      const state = await this.#loadState();
+      const normalizedDocumentId = String(documentId ?? '').trim();
+      const chunksBefore = state.chunks.length;
 
-    return {
-      removedChunks: chunksBefore - state.chunks.length,
-      totalChunks: state.chunks.length,
-      updatedAt: state.updatedAt,
-    };
+      state.chunks = state.chunks.filter((chunk) => chunk.documentId !== normalizedDocumentId);
+
+      if (state.chunks.length === chunksBefore) {
+        return {
+          removedChunks: 0,
+          totalChunks: state.chunks.length,
+          updatedAt: state.updatedAt,
+        };
+      }
+
+      state.updatedAt = new Date().toISOString();
+      await this.#saveState(state);
+
+      return {
+        removedChunks: chunksBefore - state.chunks.length,
+        totalChunks: state.chunks.length,
+        updatedAt: state.updatedAt,
+      };
+    });
   }
 
   async search(queryVector, queryTokens, documents, { productType = null, limit = 5, minScore = 0.07 } = {}) {
+    await this.#waitForWrites();
     const state = await this.#loadState();
 
     if (!state.chunks.length) {
@@ -170,10 +181,20 @@ export class LocalVectorStore {
   async #saveState(state) {
     await fs.mkdir(this.storageDir, { recursive: true });
 
-    const tmpPath = `${this.indexPath}.${Date.now()}.tmp`;
+    const tmpPath = `${this.indexPath}.${crypto.randomUUID()}.tmp`;
     await fs.writeFile(tmpPath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
     await fs.rename(tmpPath, this.indexPath);
     this.state = state;
+  }
+
+  async #serialize(operation) {
+    const next = this.writeQueue.then(operation, operation);
+    this.writeQueue = next.catch(() => undefined);
+    return next;
+  }
+
+  async #waitForWrites() {
+    await this.writeQueue.catch(() => undefined);
   }
 }
 

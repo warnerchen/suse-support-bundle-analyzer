@@ -46,11 +46,7 @@ export class BundleRepository {
   async saveIfNotDuplicate(record) {
     return this.#serialize(async () => {
       const records = await this.list();
-      const existing = records.find(
-        (candidate) =>
-          candidate.productType === record.productType &&
-          candidate.sha256 === record.sha256,
-      );
+      const existing = records.find((candidate) => candidate.sha256 === record.sha256);
 
       if (existing) {
         return {

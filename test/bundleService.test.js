@@ -8,7 +8,7 @@ import { BundleRepository } from '../src/repositories/bundleRepository.js';
 import { BundleService } from '../src/services/bundleService.js';
 import { NfsBundleStorage } from '../src/storage/nfsBundleStorage.js';
 
-test('rejects duplicate bundle uploads for the same product and checksum', async () => {
+test('rejects duplicate bundle uploads for the same checksum', async () => {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bundle-service-'));
 
   try {
@@ -31,13 +31,22 @@ test('rejects duplicate bundle uploads for the same product and checksum', async
       },
     );
 
-    const secondProduct = await service.createFromFormData(bundleFormData('longhorn', 'support-bundle.zip', 'same bundle'));
+    await assert.rejects(
+      () => service.createFromFormData(bundleFormData('longhorn', 'support-bundle.zip', 'same bundle')),
+      (error) => {
+        assert.equal(error.statusCode, 409);
+        assert.equal(error.details.code, 'duplicate_bundle');
+        assert.equal(error.details.existingBundle.id, first.id);
+        assert.equal(error.details.existingBundle.productType, 'harvester');
+        return true;
+      },
+    );
+
     const bundles = await service.listBundles();
     const storageEntries = await fs.readdir(storageDir);
 
-    assert.equal(secondProduct.productType, 'longhorn');
-    assert.equal(bundles.length, 2);
-    assert.deepEqual(new Set(storageEntries), new Set([first.id, secondProduct.id]));
+    assert.equal(bundles.length, 1);
+    assert.deepEqual(storageEntries, [first.id]);
   } finally {
     await fs.rm(rootDir, { recursive: true, force: true });
   }

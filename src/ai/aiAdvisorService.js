@@ -1,3 +1,5 @@
+import crypto from 'node:crypto';
+
 const MAX_GROUPS = 8;
 const MAX_FINDINGS = 10;
 const MAX_WORKLOADS = 8;
@@ -23,6 +25,8 @@ export class AiAdvisorService {
 
     const startedAt = Date.now();
     const context = buildAdvisorContext(report);
+    const descriptor = this.descriptor;
+    const contextFingerprint = buildAdvisorContextFingerprint(context, descriptor);
     const aiAdvisor = await this.provider.generateAdvice(context);
 
     this.logger?.info('ai_advisor.completed', {
@@ -38,8 +42,18 @@ export class AiAdvisorService {
 
     return {
       ...report,
-      aiAdvisor,
+      aiAdvisor: {
+        ...aiAdvisor,
+        provider: aiAdvisor.provider ?? descriptor.provider,
+        model: aiAdvisor.model ?? descriptor.model,
+        promptVersion: aiAdvisor.promptVersion ?? descriptor.promptVersion,
+        contextFingerprint,
+      },
     };
+  }
+
+  fingerprintReport(report) {
+    return buildAdvisorContextFingerprint(buildAdvisorContext(report), this.descriptor);
   }
 }
 
@@ -206,4 +220,35 @@ function clampContext(context) {
     keyErrors: context.keyErrors.slice(0, 8),
     truncated: true,
   };
+}
+
+export function buildAdvisorContextFingerprint(context, descriptor = {}) {
+  return crypto
+    .createHash('sha256')
+    .update(
+      stableStringify({
+        descriptor: {
+          provider: descriptor.provider ?? null,
+          model: descriptor.model ?? null,
+          promptVersion: descriptor.promptVersion ?? null,
+        },
+        context,
+      }),
+    )
+    .digest('hex');
+}
+
+function stableStringify(value) {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(',')}]`;
+  }
+
+  return `{${Object.keys(value)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
+    .join(',')}}`;
 }

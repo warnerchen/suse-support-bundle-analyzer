@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chunkKbDocument } from './kbText.js';
@@ -16,6 +17,7 @@ export class KbStore {
     this.state = null;
     this.legacyChunks = [];
     this.vectorStoreReady = false;
+    this.writeQueue = Promise.resolve();
   }
 
   async ensureReady() {
@@ -25,6 +27,7 @@ export class KbStore {
   }
 
   async getStats() {
+    await this.#waitForWrites();
     const state = await this.#loadState();
     await this.#ensureVectorStoreReady();
     const vectorStats = await this.vectorStore.getStats();
@@ -40,6 +43,7 @@ export class KbStore {
   }
 
   async listSources({ productType = null } = {}) {
+    await this.#waitForWrites();
     const state = await this.#loadState();
     const normalizedProductType = String(productType ?? '').trim().toLowerCase();
     const sources = normalizedProductType
@@ -50,93 +54,96 @@ export class KbStore {
   }
 
   async upsertDocuments(documents) {
-    const state = await this.#loadState();
-    await this.#ensureVectorStoreReady();
-    const now = new Date().toISOString();
-    const acceptedDocuments = documents.filter((document) => document.body?.trim());
-    const sourceKeys = new Set(acceptedDocuments.map((document) => document.sourceUri || document.id));
-    const documentIds = new Set(acceptedDocuments.map((document) => document.id));
-    const vectorStats = await this.vectorStore.getStats();
+    return this.#serialize(async () => {
+      const state = await this.#loadState();
+      await this.#ensureVectorStoreReady();
+      const now = new Date().toISOString();
+      const acceptedDocuments = documents.filter((document) => document.body?.trim());
+      const sourceKeys = new Set(acceptedDocuments.map((document) => document.sourceUri || document.id));
+      const documentIds = new Set(acceptedDocuments.map((document) => document.id));
+      const vectorStats = await this.vectorStore.getStats();
 
-    if (!acceptedDocuments.length) {
+      if (!acceptedDocuments.length) {
+        return {
+          documentsImported: 0,
+          chunksIndexed: 0,
+          documentsSkipped: documents.length,
+          totalDocuments: state.documents.length,
+          totalChunks: vectorStats.chunkCount,
+          updatedAt: state.updatedAt,
+        };
+      }
+
+      const removedDocumentIds = state.documents
+        .filter((document) => documentIds.has(document.id) || sourceKeys.has(document.sourceUri || document.id))
+        .map((document) => document.id);
+
+      state.documents = state.documents.filter(
+        (document) => !documentIds.has(document.id) && !sourceKeys.has(document.sourceUri || document.id),
+      );
+
+      for (const documentId of removedDocumentIds) {
+        await this.vectorStore.deleteDocumentChunks(documentId);
+      }
+
+      let importedDocuments = 0;
+      let indexedChunks = 0;
+
+      for (const document of acceptedDocuments) {
+        const chunks = [];
+
+        for (const chunk of chunkKbDocument(document)) {
+          const searchText = `${document.title}\n${chunk.content}`;
+
+          chunks.push({
+            ...chunk,
+            vector: await this.embeddingProvider.embedText(searchText, {
+              taskType: 'RETRIEVAL_DOCUMENT',
+            }),
+            searchText: searchText.toLowerCase(),
+          });
+        }
+
+        if (!chunks.length) {
+          continue;
+        }
+
+        const documentSummary = {
+          id: document.id,
+          title: document.title,
+          sourceUri: document.sourceUri,
+          productType: document.productType,
+          contentType: document.contentType,
+          importedAt: document.importedAt ?? now,
+          charCount: document.body.length,
+          chunkCount: chunks.length,
+        };
+
+        state.documents.push(documentSummary);
+        await this.vectorStore.upsertDocumentChunks(documentSummary.id, chunks);
+        importedDocuments += 1;
+        indexedChunks += chunks.length;
+      }
+
+      state.updatedAt = now;
+      state.embedding = this.embeddingProvider.descriptor;
+      state.vectorStore = this.vectorStore.descriptor;
+      await this.#saveState(state);
+      const updatedVectorStats = await this.vectorStore.getStats();
+
       return {
-        documentsImported: 0,
-        chunksIndexed: 0,
-        documentsSkipped: documents.length,
+        documentsImported: importedDocuments,
+        chunksIndexed: indexedChunks,
+        documentsSkipped: documents.length - importedDocuments,
         totalDocuments: state.documents.length,
-        totalChunks: vectorStats.chunkCount,
+        totalChunks: updatedVectorStats.chunkCount,
         updatedAt: state.updatedAt,
       };
-    }
-
-    const removedDocumentIds = state.documents
-      .filter((document) => documentIds.has(document.id) || sourceKeys.has(document.sourceUri || document.id))
-      .map((document) => document.id);
-
-    state.documents = state.documents.filter(
-      (document) => !documentIds.has(document.id) && !sourceKeys.has(document.sourceUri || document.id),
-    );
-
-    for (const documentId of removedDocumentIds) {
-      await this.vectorStore.deleteDocumentChunks(documentId);
-    }
-
-    let importedDocuments = 0;
-    let indexedChunks = 0;
-
-    for (const document of acceptedDocuments) {
-      const chunks = [];
-
-      for (const chunk of chunkKbDocument(document)) {
-        const searchText = `${document.title}\n${chunk.content}`;
-
-        chunks.push({
-          ...chunk,
-          vector: await this.embeddingProvider.embedText(searchText, {
-            taskType: 'RETRIEVAL_DOCUMENT',
-          }),
-          searchText: searchText.toLowerCase(),
-        });
-      }
-
-      if (!chunks.length) {
-        continue;
-      }
-
-      const documentSummary = {
-        id: document.id,
-        title: document.title,
-        sourceUri: document.sourceUri,
-        productType: document.productType,
-        contentType: document.contentType,
-        importedAt: document.importedAt ?? now,
-        charCount: document.body.length,
-        chunkCount: chunks.length,
-      };
-
-      state.documents.push(documentSummary);
-      await this.vectorStore.upsertDocumentChunks(documentSummary.id, chunks);
-      importedDocuments += 1;
-      indexedChunks += chunks.length;
-    }
-
-    state.updatedAt = now;
-    state.embedding = this.embeddingProvider.descriptor;
-    state.vectorStore = this.vectorStore.descriptor;
-    await this.#saveState(state);
-    const updatedVectorStats = await this.vectorStore.getStats();
-
-    return {
-      documentsImported: importedDocuments,
-      chunksIndexed: indexedChunks,
-      documentsSkipped: documents.length - importedDocuments,
-      totalDocuments: state.documents.length,
-      totalChunks: updatedVectorStats.chunkCount,
-      updatedAt: state.updatedAt,
-    };
+    });
   }
 
   async search(query, { productType = null, limit = 5, minScore = 0.07 } = {}) {
+    await this.#waitForWrites();
     const state = await this.#loadState();
     await this.#ensureVectorStoreReady();
 
@@ -157,27 +164,29 @@ export class KbStore {
   }
 
   async deleteDocument(id) {
-    const state = await this.#loadState();
-    await this.#ensureVectorStoreReady();
-    const documentId = String(id ?? '').trim();
-    const document = state.documents.find((candidate) => candidate.id === documentId);
+    return this.#serialize(async () => {
+      const state = await this.#loadState();
+      await this.#ensureVectorStoreReady();
+      const documentId = String(id ?? '').trim();
+      const document = state.documents.find((candidate) => candidate.id === documentId);
 
-    if (!document) {
-      return null;
-    }
+      if (!document) {
+        return null;
+      }
 
-    state.documents = state.documents.filter((candidate) => candidate.id !== documentId);
-    const vectorDelete = await this.vectorStore.deleteDocumentChunks(documentId);
-    state.updatedAt = new Date().toISOString();
-    await this.#saveState(state);
+      state.documents = state.documents.filter((candidate) => candidate.id !== documentId);
+      const vectorDelete = await this.vectorStore.deleteDocumentChunks(documentId);
+      state.updatedAt = new Date().toISOString();
+      await this.#saveState(state);
 
-    return {
-      ...toSourceSummary(document),
-      removedChunks: vectorDelete.removedChunks,
-      totalDocuments: state.documents.length,
-      totalChunks: vectorDelete.totalChunks,
-      updatedAt: state.updatedAt,
-    };
+      return {
+        ...toSourceSummary(document),
+        removedChunks: vectorDelete.removedChunks,
+        totalDocuments: state.documents.length,
+        totalChunks: vectorDelete.totalChunks,
+        updatedAt: state.updatedAt,
+      };
+    });
   }
 
   async #loadState() {
@@ -230,10 +239,20 @@ export class KbStore {
   async #saveState(state) {
     await fs.mkdir(this.storageDir, { recursive: true });
 
-    const tmpPath = `${this.indexPath}.${Date.now()}.tmp`;
+    const tmpPath = `${this.indexPath}.${crypto.randomUUID()}.tmp`;
     await fs.writeFile(tmpPath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
     await fs.rename(tmpPath, this.indexPath);
     this.state = state;
+  }
+
+  async #serialize(operation) {
+    const next = this.writeQueue.then(operation, operation);
+    this.writeQueue = next.catch(() => undefined);
+    return next;
+  }
+
+  async #waitForWrites() {
+    await this.writeQueue.catch(() => undefined);
   }
 }
 

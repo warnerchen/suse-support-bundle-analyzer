@@ -100,7 +100,6 @@ export const ALLOWED_ARCHIVE_SUFFIXES = [
   '.txz',
   '.zip',
   '.tar',
-  '.gz',
 ];
 
 function normalizeEmbeddingProvider(value) {

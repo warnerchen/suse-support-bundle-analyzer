@@ -8,6 +8,7 @@ import {
   CREATE_BUNDLE_STORAGE_DIR,
   HOST,
   KB_STORAGE_DIR,
+  KB_TEXT_IMPORT_MAX_BYTES,
   MAX_UPLOAD_BYTES,
   METADATA_DIR,
   PORT,
@@ -167,11 +168,19 @@ const server = http.createServer(async (request, response) => {
         return;
       }
 
-      const formData = await parseMultipartForm(request);
-      const preview = await kbService.previewFromFiles(formData.getAll('kbFiles'), {
-        productType: formData.get('productType'),
+      const formData = await parseMultipartForm(request, {
+        maxBytes: KB_TEXT_IMPORT_MAX_BYTES * 100,
+        maxFileBytes: KB_TEXT_IMPORT_MAX_BYTES,
       });
-      sendJson(response, 200, { preview, kb: await kbService.getStatus() });
+
+      try {
+        const preview = await kbService.previewFromFiles(formData.getAll('kbFiles'), {
+          productType: formData.get('productType'),
+        });
+        sendJson(response, 200, { preview, kb: await kbService.getStatus() });
+      } finally {
+        await formData.cleanup?.();
+      }
       return;
     }
 
@@ -200,11 +209,19 @@ const server = http.createServer(async (request, response) => {
         return;
       }
 
-      const formData = await parseMultipartForm(request);
-      const result = await kbService.importFromFiles(formData.getAll('kbFiles'), {
-        productType: formData.get('productType'),
+      const formData = await parseMultipartForm(request, {
+        maxBytes: KB_TEXT_IMPORT_MAX_BYTES * 100,
+        maxFileBytes: KB_TEXT_IMPORT_MAX_BYTES,
       });
-      sendJson(response, 201, { import: result, kb: await kbService.getStatus() });
+
+      try {
+        const result = await kbService.importFromFiles(formData.getAll('kbFiles'), {
+          productType: formData.get('productType'),
+        });
+        sendJson(response, 201, { import: result, kb: await kbService.getStatus() });
+      } finally {
+        await formData.cleanup?.();
+      }
       return;
     }
 
@@ -292,7 +309,7 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === '/api/bundles' && request.method === 'POST') {
       const contentLength = Number.parseInt(request.headers['content-length'] ?? '0', 10);
 
-      if (contentLength > MAX_UPLOAD_BYTES + 16 * 1024) {
+      if (contentLength > MAX_UPLOAD_BYTES + 1024 * 1024) {
         sendError(response, 413, 'The selected file is larger than the upload limit.', {
           maxUploadBytes: MAX_UPLOAD_BYTES,
         });
@@ -305,10 +322,18 @@ const server = http.createServer(async (request, response) => {
         return;
       }
 
-      const formData = await parseMultipartForm(request);
-      const bundle = await bundleService.createFromFormData(formData);
-      const analysisJob = await analysisService.createForBundle(bundle);
-      sendJson(response, 201, { bundle, analysisJob });
+      const formData = await parseMultipartForm(request, {
+        maxBytes: MAX_UPLOAD_BYTES + 1024 * 1024,
+        maxFileBytes: MAX_UPLOAD_BYTES,
+      });
+
+      try {
+        const bundle = await bundleService.createFromFormData(formData);
+        const analysisJob = await analysisService.createForBundle(bundle);
+        sendJson(response, 201, { bundle, analysisJob });
+      } finally {
+        await formData.cleanup?.();
+      }
       return;
     }
 

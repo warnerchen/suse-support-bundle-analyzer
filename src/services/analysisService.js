@@ -295,6 +295,7 @@ export class AnalysisService {
           generatedAt: new Date().toISOString(),
           provider: descriptor.provider ?? 'unknown',
           model: descriptor.model,
+          promptVersion: descriptor.promptVersion,
           errorMessage: error.message,
         },
       };
@@ -326,6 +327,7 @@ export class AnalysisService {
           generatedAt: new Date().toISOString(),
           provider: descriptor.provider ?? 'unknown',
           model: descriptor.model,
+          promptVersion: descriptor.promptVersion,
           errorMessage: error.message,
         },
       };
@@ -346,11 +348,17 @@ export class AnalysisService {
   #needsAiAdvice(report) {
     const descriptor = this.aiAdvisorService?.descriptor ?? {};
     const advisor = report?.aiAdvisor;
+    const expectedFingerprint =
+      typeof this.aiAdvisorService?.fingerprintReport === 'function'
+        ? this.aiAdvisorService.fingerprintReport(report)
+        : null;
 
     return (
       advisor?.status !== 'generated' ||
       advisor?.provider !== descriptor.provider ||
-      advisor?.model !== descriptor.model
+      advisor?.model !== descriptor.model ||
+      advisor?.promptVersion !== descriptor.promptVersion ||
+      (expectedFingerprint && advisor?.contextFingerprint !== expectedFingerprint)
     );
   }
 }
