@@ -87,6 +87,21 @@ test('builds Longhorn findings from support bundle files', async () => {
         '      message: Kernel modules [dm_crypt] are not loaded',
         '      reason: KernelModulesNotLoaded',
         '      type: KernelModulesLoaded',
+        '    diskStatus:',
+        '      default-disk-a:',
+        '        conditions:',
+        '        - message: Disk default-disk-a(/var/lib/longhorn) on node node-a is not ready',
+        '          reason: NoDiskInfo',
+        '          status: "False"',
+        '          type: Ready',
+        '        - message: Disk default-disk-a(/var/lib/longhorn) on node node-a is not schedulable',
+        '          reason: DiskNotReady',
+        '          status: "False"',
+        '          type: Schedulable',
+        '        diskName: default-disk-a',
+        '        diskPath: /var/lib/longhorn',
+        '        storageAvailable: 0',
+        '        storageMaximum: 0',
       ].join('\n'),
     );
     await writeFixtureFile(
@@ -123,9 +138,12 @@ test('builds Longhorn findings from support bundle files', async () => {
     assert.equal(result.inventory.longhorn.volumes.total, 1);
     assert.equal(result.inventory.longhorn.volumes.unhealthy, 1);
     assert.equal(result.inventory.longhorn.nodes.problematic, 1);
+    assert.equal(result.inventory.longhorn.nodes.nodesWithDiskIssues, 1);
+    assert.equal(result.inventory.longhorn.nodes.diskIssues, 2);
     assert.equal(result.inventory.longhorn.pods.withRestarts, 1);
     assert.equal(result.groupSummary.total, 6);
-    assert.equal(result.groupSummary.warning, 6);
+    assert.equal(result.groupSummary.critical, 1);
+    assert.equal(result.groupSummary.warning, 5);
     assert.ok(result.findingSummary.warning >= 5);
     assert.ok(result.findingGroups.some((group) => group.id === 'longhorn-volume-replica-health'));
     assert.ok(result.findingGroups.some((group) => group.id === 'longhorn-replica-scheduling-capacity'));
@@ -133,6 +151,7 @@ test('builds Longhorn findings from support bundle files', async () => {
     assert.ok(result.findings.some((finding) => finding.id === 'longhorn-bundle-generation-errors'));
     assert.ok(result.findings.some((finding) => finding.title.includes('Volume volume-a is degraded')));
     assert.ok(result.findings.some((finding) => finding.title.includes('Node node-a')));
+    assert.ok(result.findings.some((finding) => finding.title.includes('disk default-disk-a has Ready issue')));
     assert.ok(result.findings.some((finding) => finding.id === 'longhorn-log-replica-scheduling-storage'));
     const logFinding = result.findings.find((finding) => finding.id === 'longhorn-log-replica-scheduling-storage');
     assert.equal(logFinding.evidenceRefs[0].lineStart, 1);

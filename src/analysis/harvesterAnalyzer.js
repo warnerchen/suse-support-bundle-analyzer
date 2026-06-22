@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { analyzeLonghornSupportBundle } from './longhornAnalyzer.js';
 
 const HARVESTER_RESOURCE_ROOT = 'yamls/namespaced/harvester-system';
 const MAX_FINDINGS_PER_RULE = 12;
@@ -108,6 +109,13 @@ export async function analyzeHarvesterSupportBundle({ extractDir, index }) {
   const networkAnalysis = await analyzeHarvesterNetwork(context);
   inventory.harvester.networks = networkAnalysis.inventory;
   findings.push(...networkAnalysis.findings);
+
+  const storageAnalysis = await analyzeHarvesterStorage(context);
+  inventory.harvester.storage = storageAnalysis.inventory;
+  if (storageAnalysis.longhornInventory) {
+    inventory.longhorn = storageAnalysis.longhornInventory;
+  }
+  findings.push(...storageAnalysis.findings);
 
   const eventAnalysis = await analyzeHarvesterEvents(context);
   inventory.harvester.events = eventAnalysis.inventory;
@@ -307,6 +315,7 @@ function buildFindingGroups({ findings, inventory }) {
   const imageFindings = findings.filter((finding) => finding.category === 'Harvester Image');
   const workloadFindings = findings.filter((finding) => finding.category === 'Harvester VM');
   const networkFindings = findings.filter((finding) => finding.category === 'Harvester Network');
+  const storageFindings = findings.filter((finding) => finding.category === 'Harvester Storage');
   const eventFindings = findings.filter((finding) => finding.category === 'Kubernetes Events');
 
   if (podRestartFinding || webhookFinding || appFindings.length || podPhaseFindings.length) {
@@ -410,6 +419,34 @@ function buildFindingGroups({ findings, inventory }) {
         ],
         evidence: mergeEvidence(networkFindings),
         relatedFindingIds: findingIds(networkFindings),
+      }),
+    );
+  }
+
+  if (storageFindings.length) {
+    groups.push(
+      createFindingGroup({
+        id: 'harvester-storage-health',
+        severity: highestSeverity(storageFindings),
+        title: 'Harvester storage health needs review',
+        description:
+          'Harvester VM disks are backed by Longhorn volumes and replicas. Longhorn disk, replica, or volume degradation can affect running VMs even when KubeVirt resources look healthy.',
+        impact:
+          'Affected VMs can lose storage redundancy, fail replica rebuilds, or become harder to recover after node or disk failures.',
+        affected: compactEvidence([
+          affectedMetric('Longhorn volumes', harvester.storage?.volumes),
+          affectedMetric('Unhealthy volumes', harvester.storage?.unhealthyVolumes),
+          affectedMetric('Replicas not running', harvester.storage?.replicasNotRunning),
+          affectedMetric('Longhorn nodes with disk issues', harvester.storage?.nodesWithDiskIssues),
+          affectedMetric('Replica scheduling log matches', harvester.storage?.replicaSchedulingLogMatches),
+        ]),
+        recommendedChecks: [
+          'Open the Longhorn node YAML first when a disk is Ready=False or Schedulable=False.',
+          'Compare degraded or unknown volumes with stopped replicas to find which node or disk is preventing rebuild.',
+          'For repeated "no disks found" replica precheck messages, inspect Longhorn disk path, filesystem permissions, free space, and disk UUID on the named node.',
+        ],
+        evidence: mergeEvidence(storageFindings),
+        relatedFindingIds: findingIds(storageFindings),
       }),
     );
   }
@@ -1640,6 +1677,105 @@ async function analyzeHarvesterNetwork(context) {
   return { inventory, findings };
 }
 
+async function analyzeHarvesterStorage(context) {
+  const longhornAnalysis = await analyzeLonghornSupportBundle(context);
+  const longhorn = longhornAnalysis.inventory?.longhorn ?? {};
+  const findings = [];
+  const longhornFindings = longhornAnalysis.findings ?? [];
+  const volumeFindings = longhornFindings.filter((finding) => finding.category === 'Longhorn Volume');
+  const replicaFindings = longhornFindings.filter((finding) => finding.category === 'Longhorn Replica');
+  const nodeFindings = longhornFindings.filter((finding) => finding.category === 'Longhorn Node');
+  const schedulingFinding = longhornFindings.find(
+    (finding) => finding.id === 'longhorn-log-replica-scheduling-storage',
+  );
+  const inventory = {
+    longhornVersion: longhorn.version?.version ?? null,
+    volumes: longhorn.volumes?.total ?? 0,
+    unhealthyVolumes: longhorn.volumes?.unhealthy ?? 0,
+    replicas: longhorn.replicas?.total ?? 0,
+    replicasNotRunning: longhorn.replicas?.notRunning ?? 0,
+    nodes: longhorn.nodes?.total ?? 0,
+    nodesWithDiskIssues: longhorn.nodes?.nodesWithDiskIssues ?? longhorn.nodes?.problematic ?? 0,
+    diskIssues: longhorn.nodes?.diskIssues ?? 0,
+    replicaSchedulingLogMatches: schedulingFinding?.count ?? 0,
+  };
+
+  if (!hasLonghornStorageInventory(inventory)) {
+    return { inventory, findings: [], longhornInventory: null };
+  }
+
+  if (inventory.unhealthyVolumes > 0) {
+    findings.push(
+      createFinding({
+        id: 'harvester-longhorn-volumes-unhealthy',
+        severity: volumeFindings.some((finding) => finding.severity === 'critical') ? 'critical' : 'warning',
+        category: 'Harvester Storage',
+        title: 'Longhorn volumes backing Harvester workloads are unhealthy',
+        description:
+          'Longhorn reports degraded, faulted, or unknown volume robustness for volumes present in this Harvester bundle.',
+        evidence: summarizeRelatedFindings(volumeFindings, 'Longhorn volume').slice(0, 8),
+        count: inventory.unhealthyVolumes,
+        path: volumeFindings[0]?.path ?? null,
+      }),
+    );
+  }
+
+  if (inventory.replicasNotRunning > 0) {
+    findings.push(
+      createFinding({
+        id: 'harvester-longhorn-replicas-not-running',
+        severity: 'warning',
+        category: 'Harvester Storage',
+        title: 'Longhorn replicas are not running',
+        description:
+          'Longhorn replicas backing Harvester storage are stopped or otherwise not running. This often explains degraded volume redundancy.',
+        evidence: summarizeRelatedFindings(replicaFindings, 'Longhorn replica').slice(0, 8),
+        count: inventory.replicasNotRunning,
+        path: replicaFindings[0]?.path ?? null,
+      }),
+    );
+  }
+
+  if (inventory.nodesWithDiskIssues > 0) {
+    findings.push(
+      createFinding({
+        id: 'harvester-longhorn-node-disk-issues',
+        severity: nodeFindings.some((finding) => finding.severity === 'critical') ? 'critical' : 'warning',
+        category: 'Harvester Storage',
+        title: 'Longhorn node disks are not ready',
+        description:
+          'Longhorn reports node or disk readiness problems. Harvester VM volume replicas may not schedule or rebuild on affected nodes.',
+        evidence: summarizeRelatedFindings(nodeFindings, 'Longhorn node').slice(0, 8),
+        count: inventory.nodesWithDiskIssues,
+        path: nodeFindings[0]?.path ?? null,
+      }),
+    );
+  }
+
+  if (schedulingFinding) {
+    findings.push(
+      createFinding({
+        id: 'harvester-longhorn-replica-scheduling-storage',
+        severity: schedulingFinding.severity,
+        category: 'Harvester Storage',
+        title: 'Longhorn replica scheduling is blocked by disk availability',
+        description:
+          'Longhorn manager logs show replica creation precheck failures related to unavailable disks, insufficient storage, or missing disks.',
+        evidence: schedulingFinding.evidence ?? [],
+        evidenceRefs: schedulingFinding.evidenceRefs ?? [],
+        count: schedulingFinding.count,
+        path: schedulingFinding.path,
+      }),
+    );
+  }
+
+  return {
+    inventory,
+    findings,
+    longhornInventory: longhorn,
+  };
+}
+
 async function analyzeHarvesterEvents(context) {
   const files = await Promise.all([
     readReportFile(context, `${HARVESTER_RESOURCE_ROOT}/v1/events.yaml`),
@@ -1758,6 +1894,28 @@ async function analyzeHarvesterLogs(context) {
     );
 
   return { inventory, findings };
+}
+
+function hasLonghornStorageInventory(inventory) {
+  return [
+    inventory.volumes,
+    inventory.replicas,
+    inventory.nodes,
+    inventory.unhealthyVolumes,
+    inventory.replicasNotRunning,
+    inventory.nodesWithDiskIssues,
+    inventory.replicaSchedulingLogMatches,
+  ].some((value) => Number.isFinite(value) && value > 0);
+}
+
+function summarizeRelatedFindings(findings, label) {
+  return findings.map((finding) => {
+    const evidence = finding.evidence?.[0];
+    return compactEvidence([
+      `${label}: ${finding.title}`,
+      evidence,
+    ]).join(' · ');
+  });
 }
 
 function collectHarvesterAppVersions(content) {
@@ -2045,9 +2203,37 @@ function workloadKey(namespace, name) {
 
 function extractNodeSelectorValues(section) {
   const values = [];
+  const lines = section.split(/\r?\n/);
 
-  for (const match of section.matchAll(/^\s+(?:kubernetes\.io\/hostname|hostname|nodeName):\s*(.*)$/gm)) {
-    values.push(cleanScalar(match[1]));
+  for (let index = 0; index < lines.length; index += 1) {
+    const selectorMatch = lines[index].match(/^(\s*)nodeSelector:\s*$/);
+
+    if (!selectorMatch) {
+      continue;
+    }
+
+    const selectorIndent = selectorMatch[1].length;
+
+    for (index += 1; index < lines.length; index += 1) {
+      const line = lines[index];
+
+      if (!line.trim()) {
+        continue;
+      }
+
+      const lineIndent = line.match(/^(\s*)/)?.[1].length ?? 0;
+
+      if (lineIndent <= selectorIndent) {
+        index -= 1;
+        break;
+      }
+
+      const valueMatch = line.match(/^\s+(?:kubernetes\.io\/hostname|hostname|nodeName):\s*(.*)$/);
+
+      if (valueMatch) {
+        values.push(cleanScalar(valueMatch[1]));
+      }
+    }
   }
 
   return uniqueValues(values);

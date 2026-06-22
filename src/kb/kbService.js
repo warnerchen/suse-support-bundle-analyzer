@@ -34,6 +34,8 @@ const GROUP_QUERY_HINTS = {
     'harvester virtual machine vmi vm scheduling unschedulable pending runStrategy printableStatus live migration virt-launcher node selector taint',
   'harvester-network-health':
     'harvester vm network vlan multus whereabouts bridge gro gso offload ethtool throughput connectivity',
+  'harvester-storage-health':
+    'harvester longhorn storage volume degraded unknown replica stopped not running no disks found disk not ready schedulable defaultdisk replica rebuild disk state warning',
   'harvester-node-health':
     'harvester node ready pressure ntp sync etcd voter maintenance scheduling taint label',
   'harvester-platform-events-and-logs':

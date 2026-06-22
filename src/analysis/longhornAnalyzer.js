@@ -824,11 +824,15 @@ async function analyzeLonghornNodes(context) {
   const findings = [];
   const nodes = splitKubernetesItems(file.content);
   inventory.total = nodes.length;
+  inventory.disks = 0;
+  inventory.diskIssues = 0;
+  inventory.nodesWithDiskIssues = 0;
 
   for (const node of nodes) {
     const name = readMetadataName(node) ?? 'unknown node';
     const status = topLevelSection(node, 'status');
     let nodeHasProblem = false;
+    let nodeHasDiskProblem = false;
 
     for (const condition of extractConditions(status)) {
       const expectedTrueProblem =
@@ -856,12 +860,186 @@ async function analyzeLonghornNodes(context) {
       );
     }
 
+    const diskStatuses = extractLonghornDiskStatuses(status);
+    inventory.disks += diskStatuses.length;
+
+    for (const disk of diskStatuses) {
+      for (const condition of disk.conditions) {
+        const expectedTrueProblem =
+          NODE_TRUE_CONDITIONS.has(condition.type) && condition.status !== 'True';
+
+        if (!expectedTrueProblem) {
+          continue;
+        }
+
+        nodeHasProblem = true;
+        nodeHasDiskProblem = true;
+        inventory.diskIssues += 1;
+        findings.push(
+          createFinding({
+            id: `longhorn-node-${slugify(name)}-disk-${slugify(disk.name)}-${slugify(condition.type)}`,
+            severity: condition.type === 'Ready' ? 'critical' : 'warning',
+            category: 'Longhorn Node',
+            title: `Node ${name} disk ${disk.name} has ${condition.type} issue`,
+            description:
+              'A Longhorn disk readiness or scheduling condition is not satisfied.',
+            evidence: compactEvidence([
+              `Disk: ${disk.name}`,
+              disk.path ? `Path: ${disk.path}` : null,
+              ...conditionEvidence(condition),
+              Number.isFinite(disk.storageAvailable) ? `Storage available: ${disk.storageAvailable}` : null,
+              Number.isFinite(disk.storageMaximum) ? `Storage maximum: ${disk.storageMaximum}` : null,
+            ]),
+            path: file.reportPath,
+          }),
+        );
+      }
+    }
+
     if (nodeHasProblem) {
       inventory.problematic += 1;
+    }
+
+    if (nodeHasDiskProblem) {
+      inventory.nodesWithDiskIssues += 1;
     }
   }
 
   return { inventory, findings: findings.slice(0, MAX_FINDINGS_PER_RULE) };
+}
+
+function extractLonghornDiskStatuses(section) {
+  const disks = [];
+  const lines = section.split(/\r?\n/);
+  let inDiskStatus = false;
+  let currentDisk = null;
+  let currentCondition = null;
+  let inConditions = false;
+  let lastConditionKey = null;
+
+  const pushCondition = () => {
+    if (currentDisk && currentCondition?.type) {
+      currentDisk.conditions.push(currentCondition);
+    }
+
+    currentCondition = null;
+    lastConditionKey = null;
+  };
+
+  const pushDisk = () => {
+    pushCondition();
+
+    if (currentDisk) {
+      disks.push(currentDisk);
+    }
+
+    currentDisk = null;
+    inConditions = false;
+  };
+
+  for (const line of lines) {
+    if (line === '    diskStatus:') {
+      inDiskStatus = true;
+      continue;
+    }
+
+    if (!inDiskStatus) {
+      continue;
+    }
+
+    if (/^    [A-Za-z0-9_-]+:/.test(line)) {
+      pushDisk();
+      break;
+    }
+
+    const diskMatch = line.match(/^      ([^:\s]+):\s*$/);
+
+    if (diskMatch) {
+      pushDisk();
+      currentDisk = {
+        id: cleanScalar(diskMatch[1]),
+        name: cleanScalar(diskMatch[1]),
+        path: null,
+        storageAvailable: null,
+        storageMaximum: null,
+        conditions: [],
+      };
+      continue;
+    }
+
+    if (!currentDisk) {
+      continue;
+    }
+
+    if (line === '        conditions:') {
+      inConditions = true;
+      continue;
+    }
+
+    if (inConditions && line.startsWith('        - ')) {
+      pushCondition();
+      currentCondition = {};
+      readNestedInlineListScalar(line, currentCondition, (key) => {
+        lastConditionKey = key;
+      });
+      continue;
+    }
+
+    if (inConditions) {
+      const conditionMatch = line.match(/^          ([A-Za-z0-9_-]+):\s*(.*)$/);
+
+      if (currentCondition && conditionMatch) {
+        currentCondition[conditionMatch[1]] = cleanScalar(conditionMatch[2]);
+        lastConditionKey = conditionMatch[1];
+        continue;
+      }
+
+      if (currentCondition && lastConditionKey && line.startsWith('            ')) {
+        currentCondition[lastConditionKey] = `${currentCondition[lastConditionKey]} ${line.trim()}`.trim();
+        continue;
+      }
+
+      const diskFieldAfterConditions = line.match(/^        ([A-Za-z0-9_-]+):\s*(.*)$/);
+
+      if (diskFieldAfterConditions) {
+        pushCondition();
+        inConditions = false;
+        assignLonghornDiskField(currentDisk, diskFieldAfterConditions[1], diskFieldAfterConditions[2]);
+        continue;
+      }
+    }
+
+    const diskField = line.match(/^        ([A-Za-z0-9_-]+):\s*(.*)$/);
+
+    if (diskField) {
+      assignLonghornDiskField(currentDisk, diskField[1], diskField[2]);
+    }
+  }
+
+  if (inDiskStatus) {
+    pushDisk();
+  }
+
+  return disks;
+}
+
+function assignLonghornDiskField(disk, key, value) {
+  const scalar = cleanScalar(value);
+
+  if (key === 'diskName' && scalar) {
+    disk.name = scalar;
+    return;
+  }
+
+  if (key === 'diskPath') {
+    disk.path = scalar;
+    return;
+  }
+
+  if (key === 'storageAvailable' || key === 'storageMaximum') {
+    const number = Number.parseFloat(scalar);
+    disk[key] = Number.isFinite(number) ? number : null;
+  }
 }
 
 async function analyzeLonghornPods(context) {
@@ -1324,6 +1502,15 @@ function extractContainerRestarts(section) {
 
 function readInlineListScalar(line, target, onKey = () => undefined) {
   const inline = line.slice('    - '.length);
+  readInlineScalar(inline, target, onKey);
+}
+
+function readNestedInlineListScalar(line, target, onKey = () => undefined) {
+  const inline = line.replace(/^\s*-\s*/, '');
+  readInlineScalar(inline, target, onKey);
+}
+
+function readInlineScalar(inline, target, onKey = () => undefined) {
   const match = inline.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
 
   if (!match) {

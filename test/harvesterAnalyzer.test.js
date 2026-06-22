@@ -177,6 +177,7 @@ test('builds Harvester findings from support bundle files', async () => {
         '        - multus:',
         '            networkName: default/vlan-a',
         '          name: vlan-a',
+        '        hostname: vm-a',
         '        nodeSelector:',
         '          kubernetes.io/hostname: node-b',
         '        volumes:',
@@ -302,8 +303,88 @@ test('builds Harvester findings from support bundle files', async () => {
     );
     await writeFixtureFile(
       extractDir,
+      'bundle/yamls/namespaced/longhorn-system/longhorn.io/v1beta2/settings.yaml',
+      [
+        'apiVersion: v1',
+        'items:',
+        '- apiVersion: longhorn.io/v1beta2',
+        '  kind: Setting',
+        '  metadata:',
+        '    name: current-longhorn-version',
+        '    namespace: longhorn-system',
+        '  value: v1.10.2-hotfix-1',
+      ].join('\n'),
+    );
+    await writeFixtureFile(
+      extractDir,
+      'bundle/yamls/namespaced/longhorn-system/longhorn.io/v1beta2/volumes.yaml',
+      [
+        'apiVersion: v1',
+        'items:',
+        '- apiVersion: longhorn.io/v1beta2',
+        '  kind: Volume',
+        '  metadata:',
+        '    name: pvc-storage-a',
+        '  status:',
+        '    currentNodeID: node-a',
+        '    robustness: degraded',
+        '    state: attached',
+      ].join('\n'),
+    );
+    await writeFixtureFile(
+      extractDir,
+      'bundle/yamls/namespaced/longhorn-system/longhorn.io/v1beta2/replicas.yaml',
+      [
+        'apiVersion: v1',
+        'items:',
+        '- apiVersion: longhorn.io/v1beta2',
+        '  kind: Replica',
+        '  metadata:',
+        '    name: pvc-storage-a-r-1',
+        '  status:',
+        '    currentState: stopped',
+      ].join('\n'),
+    );
+    await writeFixtureFile(
+      extractDir,
+      'bundle/yamls/namespaced/longhorn-system/longhorn.io/v1beta2/nodes.yaml',
+      [
+        'apiVersion: v1',
+        'items:',
+        '- apiVersion: longhorn.io/v1beta2',
+        '  kind: Node',
+        '  metadata:',
+        '    name: node-a',
+        '  status:',
+        '    conditions:',
+        '    - status: "True"',
+        '      type: Ready',
+        '    diskStatus:',
+        '      default-disk-a:',
+        '        conditions:',
+        '        - message: Disk default-disk-a(/var/lib/harvester/defaultdisk) on node node-a is not ready',
+        '          reason: NoDiskInfo',
+        '          status: "False"',
+        '          type: Ready',
+        '        - message: Disk default-disk-a(/var/lib/harvester/defaultdisk) on node node-a is not schedulable',
+        '          reason: DiskNotReady',
+        '          status: "False"',
+        '          type: Schedulable',
+        '        diskName: default-disk-a',
+        '        diskPath: /var/lib/harvester/defaultdisk',
+        '        storageAvailable: 0',
+        '        storageMaximum: 0',
+      ].join('\n'),
+    );
+    await writeFixtureFile(
+      extractDir,
       'bundle/logs/harvester-system/virt-controller-a/virt-controller.log',
       '2026-05-20T14:28:38Z {"level":"error","msg":"Failed to mark node as unschedulable","reason":"failed calling webhook \\"validator.harvesterhci.io\\": 502 Bad Gateway"}\n',
+    );
+    await writeFixtureFile(
+      extractDir,
+      'bundle/logs/longhorn-system/longhorn-manager-a/longhorn-manager.log',
+      '2026-06-20T01:46:46Z time="2026-06-20T01:46:46Z" level=warning msg="Precheck failed for creating new replica pvc-storage-a-r-x: disks are unavailable: no disks found on node node-a" volume=pvc-storage-a\n',
     );
 
     const result = await analyzeHarvesterSupportBundle({
@@ -327,16 +408,28 @@ test('builds Harvester findings from support bundle files', async () => {
     assert.equal(result.inventory.harvester.workloads.migrationsFailed, 1);
     assert.equal(result.inventory.harvester.vmImages.withIssues, 1);
     assert.equal(result.inventory.harvester.networks.withIssues, 1);
+    assert.equal(result.inventory.harvester.storage.longhornVersion, 'v1.10.2-hotfix-1');
+    assert.equal(result.inventory.harvester.storage.unhealthyVolumes, 1);
+    assert.equal(result.inventory.harvester.storage.replicasNotRunning, 1);
+    assert.equal(result.inventory.harvester.storage.nodesWithDiskIssues, 1);
+    assert.equal(result.inventory.harvester.storage.diskIssues, 2);
+    assert.equal(result.inventory.harvester.storage.replicaSchedulingLogMatches, 1);
+    assert.equal(result.inventory.longhorn.version.version, 'v1.10.2-hotfix-1');
     assert.ok(result.findings.some((finding) => finding.id === 'harvester-bundle-generation-errors'));
     assert.ok(result.findings.some((finding) => finding.id === 'harvester-vms-not-ready'));
     assert.ok(result.findings.some((finding) => finding.id === 'harvester-vmis-not-running'));
     assert.ok(result.findings.some((finding) => finding.id === 'harvester-vm-migrations-failed'));
     assert.ok(result.findings.some((finding) => finding.id === 'harvester-log-webhook-errors'));
     assert.ok(result.findings.some((finding) => finding.id === 'harvester-log-virtualization-scheduling'));
+    assert.ok(result.findings.some((finding) => finding.id === 'harvester-longhorn-volumes-unhealthy'));
+    assert.ok(result.findings.some((finding) => finding.id === 'harvester-longhorn-replicas-not-running'));
+    assert.ok(result.findings.some((finding) => finding.id === 'harvester-longhorn-node-disk-issues'));
+    assert.ok(result.findings.some((finding) => finding.id === 'harvester-longhorn-replica-scheduling-storage'));
     assert.ok(result.findingGroups.some((group) => group.id === 'harvester-control-plane-health'));
     assert.ok(result.findingGroups.some((group) => group.id === 'harvester-virtualization-readiness'));
     assert.ok(result.findingGroups.some((group) => group.id === 'harvester-vm-workload-health'));
     assert.ok(result.findingGroups.some((group) => group.id === 'harvester-network-health'));
+    assert.ok(result.findingGroups.some((group) => group.id === 'harvester-storage-health'));
     assert.equal(result.correlations.harvesterWorkloads.length, 1);
     assert.equal(result.correlations.harvesterWorkloads[0].name, 'vm-a');
     assert.equal(result.correlations.harvesterWorkloads[0].namespace, 'default');

@@ -232,7 +232,7 @@ const TRANSLATIONS = {
     objectSignals: ({ count }) => `${count} signal${count === 1 ? '' : 's'}`,
     namespace: 'Namespace',
     node: 'Node',
-    desiredNode: 'Desired Node',
+    desiredNode: 'Node Selector',
     image: 'Image',
     network: 'Network',
     vmStatus: 'VM Status',
@@ -277,6 +277,7 @@ const TRANSLATIONS = {
     migrations: 'Migrations',
     vmImages: 'VM Images',
     networks: 'Networks',
+    storage: 'Storage',
     virtualization: 'Virtualization',
     events: 'Events',
     logs: 'Logs',
@@ -480,7 +481,7 @@ const TRANSLATIONS = {
     objectSignals: ({ count }) => `${count} 个信号`,
     namespace: '命名空间',
     node: '节点',
-    desiredNode: '期望节点',
+    desiredNode: '节点选择器',
     image: '镜像',
     network: '网络',
     vmStatus: 'VM 状态',
@@ -525,6 +526,7 @@ const TRANSLATIONS = {
     migrations: '迁移',
     vmImages: 'VM 镜像',
     networks: '网络',
+    storage: '存储',
     virtualization: '虚拟化',
     events: '事件',
     logs: '日志',
@@ -616,6 +618,7 @@ const CATEGORY_LABELS = {
     'Harvester VM': 'Harvester 虚拟机',
     'Harvester Image': 'Harvester 镜像',
     'Harvester Network': 'Harvester 网络',
+    'Harvester Storage': 'Harvester 存储',
     Virtualization: '虚拟化',
   },
 };
@@ -692,6 +695,22 @@ const FINDING_TEXT = {
     'harvester-vlan-status-not-ready': {
       title: 'VLAN 状态未就绪',
       description: '一个或多个 Harvester VLANStatus 资源未就绪。',
+    },
+    'harvester-longhorn-volumes-unhealthy': {
+      title: '承载 Harvester 工作负载的 Longhorn 卷不健康',
+      description: 'Longhorn 报告此 Harvester bundle 中存在 degraded、faulted 或 unknown 的卷健壮性状态。',
+    },
+    'harvester-longhorn-replicas-not-running': {
+      title: 'Longhorn 副本未运行',
+      description: '承载 Harvester 存储的 Longhorn 副本处于 stopped 或其他非 running 状态，通常会导致卷冗余下降。',
+    },
+    'harvester-longhorn-node-disk-issues': {
+      title: 'Longhorn 节点磁盘未就绪',
+      description: 'Longhorn 报告节点或磁盘 readiness 问题，Harvester VM 卷副本可能无法在受影响节点调度或 rebuild。',
+    },
+    'harvester-longhorn-replica-scheduling-storage': {
+      title: 'Longhorn 副本调度被磁盘可用性阻塞',
+      description: 'Longhorn manager 日志显示副本创建预检查失败，原因与磁盘不可用、空间不足或找不到磁盘有关。',
     },
     'harvester-kubevirt-not-ready': {
       title: 'KubeVirt 未完全就绪',
@@ -841,6 +860,16 @@ const GROUP_TEXT = {
         '对 offload 发现项，在修改 VM 网络前先确认相关 NIC 的 GRO/GSO 设置。',
       ],
     },
+    'harvester-storage-health': {
+      title: '需要检查 Harvester 存储健康状态',
+      description: 'Harvester VM 磁盘依赖 Longhorn 卷和副本。即使 KubeVirt 资源看起来正常，Longhorn 磁盘、副本或卷退化仍可能影响 VM。',
+      impact: '受影响 VM 可能出现存储冗余下降、副本 rebuild 失败，或在节点/磁盘故障后更难恢复。',
+      recommendedChecks: [
+        '当 Longhorn 磁盘 Ready=False 或 Schedulable=False 时，优先打开 Longhorn node YAML。',
+        '将 degraded 或 unknown 卷与 stopped 副本对齐，确认是哪台节点或哪个磁盘阻止 rebuild。',
+        '如果反复出现 no disks found 副本预检查消息，检查对应节点上的 Longhorn 磁盘路径、文件系统权限、可用空间和 disk UUID。',
+      ],
+    },
     'harvester-node-health': {
       title: 'Harvester 节点健康存在信号',
       description: 'Kubernetes 节点 readiness、pressure、etcd voter 状态和 Harvester NTP 注解是稳定 VM 调度的基础信号。',
@@ -909,6 +938,9 @@ const EVIDENCE_LABELS = {
     'VMIs not running': '未运行的 VMI',
     'Failed migrations': '失败迁移',
     'Scheduling log matches': '调度日志匹配',
+    'Longhorn volumes': 'Longhorn 卷',
+    'Longhorn nodes with disk issues': '存在磁盘问题的 Longhorn 节点',
+    'Replica scheduling log matches': '副本调度日志匹配',
     'Network issues': '网络问题',
     'Network log matches': '网络日志匹配',
     'Nodes with issues': '存在问题的节点',
@@ -3081,6 +3113,22 @@ function renderLonghornInventory(inventory = {}) {
 }
 
 function renderHarvesterInventory(inventory = {}) {
+  const storageTotal = [
+    inventory.storage?.volumes,
+    inventory.storage?.replicas,
+    inventory.storage?.nodes,
+  ].find((value) => Number.isFinite(value));
+  let storageDetail = t('ready');
+
+  if (inventory.storage?.unhealthyVolumes) {
+    storageDetail = t('unhealthy', { count: inventory.storage.unhealthyVolumes });
+  } else if (inventory.storage?.replicasNotRunning) {
+    storageDetail = t('notRunning', { count: inventory.storage.replicasNotRunning });
+  } else if (inventory.storage?.nodesWithDiskIssues) {
+    storageDetail = t('withIssues', { count: inventory.storage.nodesWithDiskIssues });
+  } else if (inventory.storage?.replicaSchedulingLogMatches) {
+    storageDetail = t('logMatches', { count: inventory.storage.replicaSchedulingLogMatches });
+  }
   const rows = [
     [t('nodes'), inventory.nodes?.total, inventory.nodes?.withIssues ? t('withIssues', { count: inventory.nodes.withIssues }) : t('ready')],
     [t('pods'), inventory.pods?.total, inventory.pods?.withRestarts ? t('restarted', { count: inventory.pods.withRestarts }) : t('steady')],
@@ -3092,6 +3140,7 @@ function renderHarvesterInventory(inventory = {}) {
     [t('migrations'), inventory.workloads?.migrations, inventory.workloads?.migrationsFailed ? t('failedMigrations', { count: inventory.workloads.migrationsFailed }) : t('steady')],
     [t('vmImages'), inventory.vmImages?.total, inventory.vmImages?.withIssues ? t('failedItems', { count: inventory.vmImages.withIssues }) : t('imported')],
     [t('networks'), inventory.networks?.total, inventory.networks?.withIssues ? t('withIssues', { count: inventory.networks.withIssues }) : t('ready')],
+    [t('storage'), storageTotal, storageDetail],
     [t('events'), inventory.events?.total, inventory.events?.warnings ? t('warnings', { count: inventory.events.warnings }) : t('normal')],
     [t('logs'), inventory.logs?.scannedFiles, inventory.logs?.matchedLines ? t('logMatches', { count: inventory.logs.matchedLines }) : t('quiet')],
   ].filter(([, count]) => Number.isFinite(count));
