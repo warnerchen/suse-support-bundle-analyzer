@@ -1,4 +1,5 @@
 import { createReadStream } from 'node:fs';
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
@@ -20,6 +21,9 @@ const execFileAsync = promisify(execFile);
 const FILE_PREVIEW_MAX_BYTES = 512 * 1024;
 const FILE_PREVIEW_CONTEXT_LINES = 80;
 const FILE_PREVIEW_MAX_LINE_WINDOW = 220;
+const NESTED_ARCHIVE_MAX_DEPTH = 3;
+const ANALYSIS_METADATA_DIRNAME = '.sba-analysis';
+const NESTED_ARCHIVE_STATUS_DIRNAME = 'nested-archives';
 
 export class ArchiveAnalyzer {
   constructor({ workDir, productAnalyzers = { get: getProductAnalyzer } }) {
@@ -57,6 +61,11 @@ export class ArchiveAnalyzer {
       await fs.rm(extractDir, { recursive: true, force: true });
       throw error;
     }
+
+    await updateStage('expanding nested archives');
+    await expandNestedArchives(extractDir, {
+      maxExtractedBytes: MAX_EXTRACTED_BYTES,
+    });
 
     await updateStage('indexing files');
     const index = await buildFileIndex(extractDir);
@@ -109,7 +118,15 @@ export class ArchiveAnalyzer {
     };
   }
 
-  async readExtractedFile({ jobId, reportPath, lineStart = null, lineEnd = null, matchText = '' }) {
+  async readExtractedFile({
+    jobId,
+    reportPath,
+    lineStart = null,
+    lineEnd = null,
+    matchText = '',
+    searchText = '',
+    searchRegex = false,
+  }) {
     const normalizedPath = normalizePreviewPath(reportPath);
     const extractDir = path.join(this.workDir, jobId, 'extracted');
     const filePath = await safeResolveExistingFile(extractDir, normalizedPath);
@@ -138,7 +155,11 @@ export class ArchiveAnalyzer {
       };
     }
 
-    const matchedLine = matchText ? await findMatchingLine(filePath, matchText) : null;
+    const matchedLine = searchText
+      ? await findMatchingLine(filePath, searchText, { minLength: 1, caseInsensitive: true, regex: searchRegex })
+      : matchText
+        ? await findMatchingLine(filePath, matchText)
+        : null;
     const previewLineStart = matchedLine?.lineNumber ?? lineStart;
     const previewLineEnd = matchedLine?.lineNumber ?? lineEnd;
 
@@ -187,6 +208,30 @@ export class ArchiveAnalyzer {
     };
   }
 
+  async listExtractedFiles({ jobId }) {
+    const extractDir = path.join(this.workDir, jobId, 'extracted');
+
+    try {
+      await fs.realpath(extractDir);
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        throw previewError(404, 'Extracted bundle files are not available for this analysis job.');
+      }
+
+      throw error;
+    }
+
+    await expandNestedArchives(extractDir, {
+      maxExtractedBytes: MAX_EXTRACTED_BYTES,
+    });
+    const index = await buildFileIndex(extractDir);
+
+    return {
+      summary: summarizeFileIndex(index),
+      fileIndex: index.filter((entry) => entry.type === 'file'),
+    };
+  }
+
   async enrichExistingReport(report) {
     const productAnalyzer = this.#getProductAnalyzer(report.productType);
 
@@ -196,8 +241,20 @@ export class ArchiveAnalyzer {
 
     try {
       const extractDir = path.join(this.workDir, report.jobId, 'extracted');
+      await expandNestedArchives(extractDir, {
+        maxExtractedBytes: MAX_EXTRACTED_BYTES,
+      });
       const index = await buildFileIndex(extractDir);
-      return productAnalyzer.enrichExistingReport(report, { extractDir, index });
+      const refreshedReport = {
+        ...report,
+        summary: summarizeFileIndex(index),
+        topLevelEntries: summarizeTopLevelEntries(index),
+        largestFiles: largestFiles(index, 10),
+        fileIndex: index
+          .filter((entry) => entry.type === 'file')
+          .slice(0, MAX_REPORT_FILE_ENTRIES),
+      };
+      return productAnalyzer.enrichExistingReport(refreshedReport, { extractDir, index });
     } catch (error) {
       if (error.code === 'ENOENT') {
         return report;
@@ -326,11 +383,34 @@ async function readLineWindow(filePath, { lineStart, lineEnd, contextLines }) {
   };
 }
 
-async function findMatchingLine(filePath, matchText) {
+async function findMatchingLine(
+  filePath,
+  matchText,
+  { minLength = 16, caseInsensitive = false, regex = false } = {},
+) {
   const needle = String(matchText ?? '').trim().replace(/\.\.\.$/, '').trim();
 
-  if (needle.length < 16) {
+  if (needle.length < minLength) {
     return null;
+  }
+
+  let matcher;
+
+  if (regex) {
+    try {
+      const searchRegex = new RegExp(needle, caseInsensitive ? 'i' : '');
+      matcher = (line) => searchRegex.test(line);
+    } catch {
+      const error = new Error('Invalid regular expression search.');
+      error.statusCode = 400;
+      throw error;
+    }
+  } else {
+    const normalizedNeedle = caseInsensitive ? needle.toLowerCase() : needle;
+    matcher = (line) => {
+      const haystack = caseInsensitive ? line.toLowerCase() : line;
+      return haystack.includes(normalizedNeedle);
+    };
   }
 
   const input = createReadStream(filePath, { encoding: 'utf8' });
@@ -344,7 +424,7 @@ async function findMatchingLine(filePath, matchText) {
     for await (const line of reader) {
       lineNumber += 1;
 
-      if (line.includes(needle)) {
+      if (matcher(line)) {
         return {
           line,
           lineNumber,
@@ -473,7 +553,7 @@ export function validateArchiveEntryPath(entryPath) {
 
 async function extractArchive(archivePath, archiveType, extractDir, { maxExtractedBytes } = {}) {
   if (archiveType === 'zip') {
-    await runCommandWithDirectoryQuota('unzip', ['-q', archivePath, '-d', extractDir], {
+    await runCommandWithDirectoryQuota('unzip', ['-oq', archivePath, '-d', extractDir], {
       directory: extractDir,
       maxBytes: maxExtractedBytes,
     });
@@ -491,6 +571,234 @@ async function extractArchive(archivePath, archiveType, extractDir, { maxExtract
   throw new Error(`Unsupported archive type: ${archiveType}`);
 }
 
+async function expandNestedArchives(rootDir, { maxExtractedBytes, maxDepth = NESTED_ARCHIVE_MAX_DEPTH } = {}) {
+  const processedArchives = new Set();
+
+  for (let depth = 0; depth < maxDepth; depth += 1) {
+    const index = await buildFileIndex(rootDir);
+    const archives = index.filter((entry) => entry.type === 'file' && inferArchiveType(entry.path));
+    let expandedCount = 0;
+
+    for (const entry of archives) {
+      const archivePath = path.join(rootDir, entry.path);
+      const archiveRealPath = await fs.realpath(archivePath);
+
+      if (processedArchives.has(archiveRealPath)) {
+        continue;
+      }
+
+      processedArchives.add(archiveRealPath);
+
+      const archiveType = inferArchiveType(entry.path);
+      const target = await nestedArchiveTarget(rootDir, entry.path);
+
+      if (target.skipped) {
+        continue;
+      }
+
+      if (target.alreadyExpanded) {
+        continue;
+      }
+
+      let archiveEntries;
+
+      try {
+        archiveEntries = await listArchiveEntries(archivePath, archiveType);
+        validateArchiveEntries(archiveEntries);
+      } catch (error) {
+        await writeNestedArchiveStatus(rootDir, entry.path, {
+          status: 'skipped',
+          reason: 'list-failed',
+          message: error.message,
+        });
+        continue;
+      }
+
+      const remainingBytes = await remainingExtractionBudget(rootDir, maxExtractedBytes);
+
+      if (remainingBytes <= 0) {
+        await writeNestedArchiveStatus(rootDir, entry.path, {
+          status: 'skipped',
+          reason: 'budget-exhausted',
+          message: `No extraction budget remains within the configured limit of ${maxExtractedBytes} bytes.`,
+        });
+        continue;
+      }
+
+      const targetDir = target.path;
+      await fs.mkdir(targetDir, { recursive: true });
+
+      try {
+        await extractArchive(archivePath, archiveType, targetDir, {
+          maxExtractedBytes: remainingBytes,
+        });
+      } catch (error) {
+        await fs.rm(targetDir, { recursive: true, force: true });
+
+        if (isExtractionQuotaError(error)) {
+          await writeNestedArchiveStatus(rootDir, entry.path, {
+            status: 'skipped',
+            reason: 'quota-exceeded',
+            message: error.message,
+          });
+          continue;
+        }
+
+        throw error;
+      }
+
+      if (Number.isFinite(maxExtractedBytes) && maxExtractedBytes > 0) {
+        const totalBytes = await directorySize(rootDir);
+
+        if (totalBytes > maxExtractedBytes) {
+          await fs.rm(targetDir, { recursive: true, force: true });
+          await writeNestedArchiveStatus(rootDir, entry.path, {
+            status: 'skipped',
+            reason: 'quota-exceeded',
+            message: `Extracted data is larger than the configured limit of ${maxExtractedBytes} bytes.`,
+          });
+          continue;
+        }
+      }
+
+      await writeNestedArchiveStatus(rootDir, entry.path, {
+        status: 'expanded',
+        targetPath: path.relative(rootDir, targetDir).replaceAll(path.sep, '/'),
+        entryCount: archiveEntries.length,
+      });
+      expandedCount += 1;
+    }
+
+    if (!expandedCount) {
+      return;
+    }
+  }
+}
+
+async function nestedArchiveTarget(rootDir, archiveReportPath) {
+  const status = await readNestedArchiveStatus(rootDir, archiveReportPath);
+
+  if (status?.status === 'skipped') {
+    return {
+      skipped: true,
+      reason: status.reason,
+    };
+  }
+
+  if (status?.status === 'expanded' && status.targetPath) {
+    validateArchiveEntryPath(status.targetPath);
+    const target = path.join(rootDir, status.targetPath);
+
+    try {
+      const stats = await fs.lstat(target);
+
+      if (stats.isDirectory()) {
+        return {
+          path: target,
+          alreadyExpanded: true,
+        };
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        throw error;
+      }
+    }
+  }
+
+  const baseTargetPath = stripArchiveSuffix(archiveReportPath);
+  const candidatePaths = [
+    baseTargetPath,
+    `${baseTargetPath}.contents`,
+    `${baseTargetPath}.contents-2`,
+    `${baseTargetPath}.contents-3`,
+  ];
+
+  for (const candidatePath of candidatePaths) {
+    validateArchiveEntryPath(candidatePath);
+    const candidate = path.join(rootDir, candidatePath);
+
+    try {
+      await fs.lstat(candidate);
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        return {
+          path: candidate,
+          alreadyExpanded: false,
+        };
+      }
+
+      throw error;
+    }
+  }
+
+  const fallbackPath = `${baseTargetPath}.contents-${Date.now()}`;
+  validateArchiveEntryPath(fallbackPath);
+
+  return {
+    path: path.join(rootDir, fallbackPath),
+    alreadyExpanded: false,
+  };
+}
+
+async function remainingExtractionBudget(rootDir, maxExtractedBytes) {
+  if (!Number.isFinite(maxExtractedBytes) || maxExtractedBytes <= 0) {
+    return maxExtractedBytes;
+  }
+
+  const currentBytes = await directorySize(rootDir);
+  return Math.max(0, maxExtractedBytes - currentBytes);
+}
+
+function isExtractionQuotaError(error) {
+  return String(error?.message ?? '').includes('larger than the configured limit');
+}
+
+async function readNestedArchiveStatus(rootDir, archiveReportPath) {
+  let content;
+
+  try {
+    content = await fs.readFile(nestedArchiveStatusPath(rootDir, archiveReportPath), 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return null;
+    }
+
+    throw error;
+  }
+
+  try {
+    return JSON.parse(content);
+  } catch {
+    return null;
+  }
+}
+
+async function writeNestedArchiveStatus(rootDir, archiveReportPath, status) {
+  const statusPath = nestedArchiveStatusPath(rootDir, archiveReportPath);
+  await fs.mkdir(path.dirname(statusPath), { recursive: true });
+  await fs.writeFile(
+    statusPath,
+    JSON.stringify({
+      archivePath: archiveReportPath,
+      updatedAt: new Date().toISOString(),
+      ...status,
+    }, null, 2),
+    'utf8',
+  );
+}
+
+function nestedArchiveStatusPath(rootDir, archiveReportPath) {
+  const digest = crypto.createHash('sha1').update(String(archiveReportPath)).digest('hex');
+  return path.join(rootDir, ANALYSIS_METADATA_DIRNAME, NESTED_ARCHIVE_STATUS_DIRNAME, `${digest}.json`);
+}
+
+function stripArchiveSuffix(reportPath) {
+  return String(reportPath).replace(
+    /(\.tar\.gz|\.tgz|\.tar\.xz|\.txz|\.tar\.bz2|\.tbz2|\.tar\.zst|\.tar|\.zip)$/i,
+    '',
+  );
+}
+
 async function buildFileIndex(rootDir) {
   const entries = [];
 
@@ -498,6 +806,10 @@ async function buildFileIndex(rootDir) {
     const children = await fs.readdir(currentDir, { withFileTypes: true });
 
     for (const child of children) {
+      if (!relativeDir && child.name === ANALYSIS_METADATA_DIRNAME) {
+        continue;
+      }
+
       const absolutePath = path.join(currentDir, child.name);
       const relativePath = path.posix.join(relativeDir, child.name);
       const stats = await fs.lstat(absolutePath);

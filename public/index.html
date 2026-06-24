@@ -4,13 +4,12 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SUSE Support Bundle Analyzer</title>
-    <link rel="stylesheet" href="/styles.css?v=20260608-7" />
+    <link rel="stylesheet" href="/styles.css?v=20260624-7" />
   </head>
   <body>
     <div class="app-shell">
       <header class="topbar">
         <div class="brand-lockup" aria-label="SUSE Support Bundle Analyzer" data-i18n-aria-label="documentTitle">
-          <span class="brand-mark" aria-hidden="true"></span>
           <div>
             <p class="eyebrow" data-i18n="brandEyebrow">SUSE Technical Support</p>
             <h1 data-i18n="appTitle">Support Bundle Analyzer</h1>
@@ -54,7 +53,7 @@
         <section class="upload-panel" aria-labelledby="uploadTitle">
           <div class="panel-heading">
             <div>
-              <p class="eyebrow" data-i18n="bundleIntake">Bundle Intake</p>
+              <p class="eyebrow" data-i18n="bundleIntake">Bundle Import</p>
               <h2 id="uploadTitle" data-i18n="uploadTitle">Upload Support Bundle</h2>
             </div>
             <div class="limit-label" id="uploadLimit"></div>
@@ -170,7 +169,15 @@
           </div>
 
           <div class="kb-layout">
-            <div class="kb-import-stack">
+            <section class="kb-status-panel" aria-labelledby="kbStatusTitle">
+              <div class="kb-field-label" id="kbStatusTitle" data-i18n="indexStatus">Index Status</div>
+              <div class="kb-stats" id="kbStats">
+                <p class="empty-report" data-i18n="loadingKbStatus">Loading KB status</p>
+              </div>
+            </section>
+
+            <section class="kb-import-stack" aria-labelledby="kbImportTitle">
+              <div class="kb-field-label" id="kbImportTitle" data-i18n="importKb">Import KB</div>
               <div class="kb-import-options">
                 <div class="kb-product-scope">
                   <span data-i18n="productScope">Product Scope</span>
@@ -236,21 +243,18 @@
                 <div class="kb-file-control">
                   <input id="kbFileInput" class="kb-file-input" type="file" accept=".md,.markdown,text/markdown" multiple />
                   <label class="kb-file-picker" for="kbFileInput" data-i18n="chooseFiles">Choose files</label>
-                  <span id="kbFileName" class="kb-file-name" data-i18n="noFilesSelected">No files selected</span>
+                  <span id="kbFileName" class="kb-file-name"></span>
                   <button class="primary-button kb-file-import-button" id="kbFileImportButton" type="submit" data-i18n="previewFiles">Preview Files</button>
                 </div>
               </form>
 
               <p class="form-message" id="kbMessage"></p>
               <div class="kb-preview-panel" id="kbPreviewPanel" hidden></div>
-            </div>
-            <div class="kb-status-panel">
-              <div class="kb-field-label" data-i18n="indexStatus">Index Status</div>
-              <div class="kb-stats" id="kbStats">
-                <p class="empty-report" data-i18n="loadingKbStatus">Loading KB status</p>
-              </div>
+            </section>
+
+            <section class="kb-sources-panel" aria-labelledby="kbSourcesTitle">
               <div class="kb-sources-header">
-                <div class="kb-field-label" data-i18n="sources">Sources</div>
+                <div class="kb-field-label" id="kbSourcesTitle" data-i18n="sources">Sources</div>
                 <div class="product-picker source-filter-picker" id="kbSourceFilterPicker" data-product-picker data-empty-is-option="true">
                   <input id="kbSourceFilter" type="hidden" value="" />
                   <button
@@ -284,7 +288,7 @@
               <div class="kb-source-list" id="kbSourceList">
                 <p class="empty-report" data-i18n="loadingKbSources">Loading KB sources</p>
               </div>
-            </div>
+            </section>
           </div>
         </section>
 
@@ -350,6 +354,6 @@
       </aside>
     </div>
 
-    <script src="/app.js?v=20260608-7" type="module"></script>
+    <script src="/app.js?v=20260624-7" type="module"></script>
   </body>
 </html>

@@ -242,9 +242,17 @@ const server = http.createServer(async (request, response) => {
           lineStart: parsePositiveInteger(url.searchParams.get('lineStart')),
           lineEnd: parsePositiveInteger(url.searchParams.get('lineEnd')),
           matchText: url.searchParams.get('matchText') ?? '',
+          searchText: url.searchParams.get('searchText') ?? '',
+          searchRegex: url.searchParams.get('searchRegex') === 'true',
         });
 
         sendJson(response, 200, { file });
+        return;
+      }
+
+      if (parts.length === 4 && parts[3] === 'file-index') {
+        const fileIndex = await analysisService.getExtractedFileIndex(id);
+        sendJson(response, 200, fileIndex);
         return;
       }
 

@@ -73,7 +73,10 @@ export class AnalysisService {
     return this.#adviseStoredReport(enrichedReport);
   }
 
-  async getExtractedFile(jobId, { reportPath, lineStart = null, lineEnd = null, matchText = '' } = {}) {
+  async getExtractedFile(
+    jobId,
+    { reportPath, lineStart = null, lineEnd = null, matchText = '', searchText = '', searchRegex = false } = {},
+  ) {
     const job = await this.jobRepository.findById(jobId);
 
     if (!job) {
@@ -94,7 +97,21 @@ export class AnalysisService {
       lineStart,
       lineEnd,
       matchText,
+      searchText,
+      searchRegex,
     });
+  }
+
+  async getExtractedFileIndex(jobId) {
+    const job = await this.jobRepository.findById(jobId);
+
+    if (!job) {
+      const error = new Error('Analysis job not found.');
+      error.statusCode = 404;
+      throw error;
+    }
+
+    return this.analyzer.listExtractedFiles({ jobId });
   }
 
   async hasRunningJobForBundle(bundleId) {

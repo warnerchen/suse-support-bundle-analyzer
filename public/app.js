@@ -68,7 +68,7 @@ const TRANSLATIONS = {
     statusWarning: 'warning',
     statusBlocked: 'blocked',
     statusApiOffline: 'API offline',
-    bundleIntake: 'Bundle Intake',
+    bundleIntake: 'Bundle Import',
     uploadTitle: 'Upload Support Bundle',
     limitLabel: ({ size }) => `Limit ${size}`,
     product: 'Product',
@@ -102,6 +102,7 @@ const TRANSLATIONS = {
     sourceUrls: 'Source URLs',
     previewUrls: 'Preview URLs',
     markdownFiles: 'Markdown Files',
+    importKb: 'Import KB',
     chooseFiles: 'Choose files',
     noFilesSelected: 'No files selected',
     selectedFiles: ({ count, size }) => `${count} file${count === 1 ? '' : 's'} · ${size}`,
@@ -134,6 +135,19 @@ const TRANSLATIONS = {
     partialPreview: 'partial preview',
     linesRange: ({ start, end }) => `lines ${start}-${end}`,
     fileCannotPreview: 'This file cannot be previewed.',
+    smartAnalysis: 'Smart Analysis',
+    rawLogs: 'Raw Logs',
+    rawLogBrowser: 'Raw Bundle Files',
+    rawLogTree: 'File Tree',
+    rawLogPreview: 'File Content',
+    rawLogSearchPlaceholder: 'Search file content, for example CrashLoopBackOff',
+    search: 'Search',
+    clearSearch: 'Clear',
+    regexSearch: 'Regex',
+    selectRawLogFile: 'Select a file from the bundle tree.',
+    noRawLogFiles: 'No files are available in this report.',
+    noRawLogMatch: ({ query }) => `No match found for "${query}".`,
+    rawLogMatch: ({ query }) => `Matched "${query}"`,
     apiUnavailable: 'API unavailable',
     unableToLoadKbStatus: 'Unable to load KB status.',
     kbStatusUnavailable: 'KB status unavailable',
@@ -351,6 +365,7 @@ const TRANSLATIONS = {
     sourceUrls: '来源 URL',
     previewUrls: '预览 URL',
     markdownFiles: 'Markdown 文件',
+    importKb: '导入 KB',
     chooseFiles: '选择文件',
     noFilesSelected: '未选择文件',
     selectedFiles: ({ count, size }) => `${count} 个文件 · ${size}`,
@@ -383,6 +398,19 @@ const TRANSLATIONS = {
     partialPreview: '部分预览',
     linesRange: ({ start, end }) => `第 ${start}-${end} 行`,
     fileCannotPreview: '该文件无法预览。',
+    smartAnalysis: '智能分析',
+    rawLogs: '原日志',
+    rawLogBrowser: '原始 Bundle 文件',
+    rawLogTree: '文件树',
+    rawLogPreview: '文件内容',
+    rawLogSearchPlaceholder: '搜索文件内容，例如 CrashLoopBackOff',
+    search: '搜索',
+    clearSearch: '清空',
+    regexSearch: '正则',
+    selectRawLogFile: '从 Bundle 文件树中选择一个文件。',
+    noRawLogFiles: '该报告没有可浏览的文件。',
+    noRawLogMatch: ({ query }) => `没有找到 “${query}” 的匹配项。`,
+    rawLogMatch: ({ query }) => `已匹配 “${query}”`,
     apiUnavailable: 'API 不可用',
     unableToLoadKbStatus: '无法加载 KB 状态。',
     kbStatusUnavailable: 'KB 状态不可用',
@@ -568,6 +596,7 @@ const STATUS_LABELS = {
     preparing: 'preparing',
     'listing archive': 'listing archive',
     'extracting archive': 'extracting archive',
+    'expanding nested archives': 'expanding nested archives',
     'indexing files': 'indexing files',
     'running product checks': 'running product checks',
     'generating ai advice': 'generating AI advice',
@@ -582,6 +611,7 @@ const STATUS_LABELS = {
     preparing: '准备中',
     'listing archive': '读取归档列表',
     'extracting archive': '解压中',
+    'expanding nested archives': '展开嵌套归档',
     'indexing files': '索引文件中',
     'running product checks': '执行产品检查',
     'generating ai advice': '生成 AI 建议中',
@@ -966,6 +996,10 @@ let latestBundles = [];
 let latestAnalysisJobs = [];
 let latestKbStatus = null;
 let currentReport = null;
+let currentReportView = 'analysis';
+let rawLogState = createRawLogState();
+let rawLogRequestSequence = 0;
+let rawLogIndexRequestSequence = 0;
 let apiStatusKey = 'statusChecking';
 let apiStatusState = null;
 let currentLanguage = loadLanguagePreference();
@@ -1170,6 +1204,34 @@ function bindEvents() {
   });
 
   reportContent.addEventListener('click', (event) => {
+    const viewButton = event.target.closest('[data-report-view]');
+
+    if (viewButton) {
+      setReportView(viewButton.dataset.reportView);
+      return;
+    }
+
+    const rawFileButton = event.target.closest('[data-raw-log-path]');
+
+    if (rawFileButton) {
+      loadRawLogFile(rawFileButton.dataset.rawLogPath);
+      return;
+    }
+
+    const rawSearchButton = event.target.closest('[data-raw-log-search-button]');
+
+    if (rawSearchButton) {
+      searchRawLogFile();
+      return;
+    }
+
+    const rawClearButton = event.target.closest('[data-raw-log-clear-button]');
+
+    if (rawClearButton) {
+      clearRawLogSearch();
+      return;
+    }
+
     const previewButton = event.target.closest('[data-preview-path]');
 
     if (previewButton) {
@@ -1179,6 +1241,53 @@ function bindEvents() {
         lineEnd: toOptionalNumber(previewButton.dataset.lineEnd),
         matchText: previewButton.dataset.matchText || '',
       });
+    }
+  });
+  reportContent.addEventListener('input', (event) => {
+    if (event.target.matches('[data-raw-log-search]')) {
+      rawLogState.query = event.target.value;
+    }
+  });
+  reportContent.addEventListener('change', (event) => {
+    if (event.target.matches('[data-raw-log-regex]')) {
+      rawLogState = {
+        ...rawLogState,
+        searchRegex: event.target.checked,
+      };
+    }
+  });
+  reportContent.addEventListener(
+    'toggle',
+    (event) => {
+      if (!event.target.matches?.('[data-raw-log-directory]')) {
+        return;
+      }
+
+      const directoryPath = event.target.dataset.rawLogDirectory;
+
+      if (!directoryPath) {
+        return;
+      }
+
+      const expandedDirectories = new Set(rawLogState.expandedDirectories);
+
+      if (event.target.open) {
+        expandedDirectories.add(directoryPath);
+      } else {
+        expandedDirectories.delete(directoryPath);
+      }
+
+      rawLogState = {
+        ...rawLogState,
+        expandedDirectories,
+      };
+    },
+    true,
+  );
+  reportContent.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && event.target.matches('[data-raw-log-search]')) {
+      event.preventDefault();
+      searchRawLogFile();
     }
   });
   closeEvidenceButton.addEventListener('click', closeEvidenceDrawer);
@@ -1575,7 +1684,7 @@ function updateSelectedKbFiles({ clearPreviewPanel = true } = {}) {
   }
 
   if (!files.length) {
-    kbFileName.textContent = t('noFilesSelected');
+    kbFileName.textContent = '';
     return;
   }
 
@@ -2421,13 +2530,22 @@ function setDeleteModalMessage(message, state) {
 
 function clearReport() {
   currentReport = null;
+  currentReportView = 'analysis';
+  rawLogState = createRawLogState();
   delete reportContent.dataset.bundleId;
   delete reportContent.dataset.jobId;
   reportContent.innerHTML = `<p class="empty-report">${escapeHtml(t('reportsWillAppear'))}</p>`;
 }
 
 function renderReport(report) {
+  const previousJobId = currentReport?.jobId;
   currentReport = report;
+
+  if (previousJobId !== report.jobId) {
+    currentReportView = 'analysis';
+    rawLogState = createRawLogState();
+  }
+
   reportContent.dataset.bundleId = report.bundleId;
   reportContent.dataset.jobId = report.jobId;
   const summary = report.summary;
@@ -2445,6 +2563,42 @@ function renderReport(report) {
   };
 
   reportContent.innerHTML = `
+    ${renderReportViewSwitch()}
+    ${
+      currentReportView === 'raw'
+        ? renderRawLogBrowser(report)
+        : renderAnalysisReport(report, summary, findingSummary, groupSummary)
+    }
+  `;
+}
+
+function renderReportViewSwitch() {
+  return `
+    <div class="report-view-switch" role="tablist" aria-label="${escapeHtml(t('analysis'))}">
+      ${['analysis', 'raw']
+        .map((view) => {
+          const active = currentReportView === view;
+          const label = view === 'analysis' ? t('smartAnalysis') : t('rawLogs');
+
+          return `
+            <button
+              class="report-view-tab${active ? ' active' : ''}"
+              type="button"
+              role="tab"
+              aria-selected="${active ? 'true' : 'false'}"
+              data-report-view="${view}"
+            >
+              ${escapeHtml(label)}
+            </button>
+          `;
+        })
+        .join('')}
+    </div>
+  `;
+}
+
+function renderAnalysisReport(report, summary, findingSummary, groupSummary) {
+  return `
     <div class="report-summary">
       <div class="metric">
         <span class="metric-value">${groupSummary.total}</span>
@@ -2507,6 +2661,538 @@ function renderReport(report) {
       </div>
     </div>
   `;
+}
+
+function createRawLogState() {
+  return {
+    selectedPath: '',
+    file: null,
+    files: null,
+    filesJobId: '',
+    filesLoading: false,
+    filesError: '',
+    loadingPath: '',
+    activeRequestId: 0,
+    query: '',
+    searchRegex: false,
+    searchedQuery: '',
+    searchedRegex: false,
+    expandedDirectories: new Set(),
+    directoryStateInitialized: false,
+    error: '',
+  };
+}
+
+function setReportView(view) {
+  if (!currentReport || !['analysis', 'raw'].includes(view)) {
+    return;
+  }
+
+  currentReportView = view;
+
+  if (view === 'raw' && !rawLogState.selectedPath) {
+    rawLogState.selectedPath = defaultRawLogPath(currentReport);
+  }
+
+  if (view === 'raw') {
+    initializeRawLogDirectoryState(currentReport);
+    loadRawLogIndex(currentReport.jobId);
+  }
+
+  renderReport(currentReport);
+
+  if (
+    view === 'raw' &&
+    rawLogState.selectedPath &&
+    !rawLogState.loadingPath &&
+    rawLogState.file?.path !== rawLogState.selectedPath
+  ) {
+    loadRawLogFile(rawLogState.selectedPath, { searchText: '' });
+  }
+}
+
+function rawLogFiles(report = currentReport) {
+  if (report && rawLogState.filesJobId === report.jobId && Array.isArray(rawLogState.files)) {
+    return rawLogState.files;
+  }
+
+  return report?.fileIndex ?? [];
+}
+
+function defaultRawLogPath(report, files = rawLogFiles(report)) {
+  const preferred = files.find((file) => isLikelyLogFile(file.path));
+  return preferred?.path ?? files[0]?.path ?? '';
+}
+
+function initializeRawLogDirectoryState(report) {
+  if (rawLogState.directoryStateInitialized) {
+    return;
+  }
+
+  rawLogState = {
+    ...rawLogState,
+    expandedDirectories: defaultRawLogExpandedDirectories(report),
+    directoryStateInitialized: true,
+  };
+}
+
+function defaultRawLogExpandedDirectories(report) {
+  const directories = new Set();
+  const rootDirectories = new Set();
+
+  for (const file of rawLogFiles(report)) {
+    const rootDirectory = file.path.split('/').filter(Boolean)[0];
+
+    if (rootDirectory) {
+      rootDirectories.add(rootDirectory);
+    }
+  }
+
+  if (rootDirectories.size === 1) {
+    directories.add([...rootDirectories][0]);
+  }
+
+  return directories;
+}
+
+function isLikelyLogFile(reportPath = '') {
+  const lower = reportPath.toLowerCase();
+  return lower.includes('/logs/') || lower.endsWith('.log') || lower.endsWith('.txt');
+}
+
+async function loadRawLogIndex(jobId) {
+  if (!jobId || rawLogState.filesLoading || rawLogState.filesJobId === jobId) {
+    return;
+  }
+
+  const requestId = ++rawLogIndexRequestSequence;
+  rawLogState = {
+    ...rawLogState,
+    filesLoading: true,
+    filesError: '',
+  };
+
+  try {
+    const response = await fetch(`/api/analysis-jobs/${encodeURIComponent(jobId)}/file-index`);
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error?.message ?? t('unableToLoadEvidenceFile'));
+    }
+
+    if (requestId !== rawLogIndexRequestSequence || reportContent.dataset.jobId !== jobId) {
+      return;
+    }
+
+    const files = payload.fileIndex ?? [];
+    const selectedPath = rawLogState.selectedPath || defaultRawLogPath(currentReport, files);
+
+    rawLogState = {
+      ...rawLogState,
+      files,
+      filesJobId: jobId,
+      filesLoading: false,
+      filesError: '',
+      selectedPath,
+    };
+  } catch (error) {
+    if (requestId !== rawLogIndexRequestSequence || reportContent.dataset.jobId !== jobId) {
+      return;
+    }
+
+    rawLogState = {
+      ...rawLogState,
+      filesLoading: false,
+      filesError: error.message,
+    };
+  }
+
+  if (currentReportView === 'raw' && currentReport?.jobId === jobId) {
+    renderReport(currentReport);
+
+    if (
+      rawLogState.selectedPath &&
+      !rawLogState.loadingPath &&
+      rawLogState.file?.path !== rawLogState.selectedPath
+    ) {
+      loadRawLogFile(rawLogState.selectedPath, { searchText: '' });
+    }
+  }
+}
+
+async function loadRawLogFile(
+  reportPath,
+  { searchText = rawLogState.query.trim(), searchRegex = rawLogState.searchRegex } = {},
+) {
+  const jobId = reportContent.dataset.jobId;
+
+  if (!jobId || !reportPath) {
+    return;
+  }
+
+  const requestId = ++rawLogRequestSequence;
+  rawLogState = {
+    ...rawLogState,
+    selectedPath: reportPath,
+    loadingPath: reportPath,
+    activeRequestId: requestId,
+    searchedQuery: searchText,
+    searchedRegex: Boolean(searchText && searchRegex),
+    error: '',
+  };
+  renderReport(currentReport);
+
+  const params = new URLSearchParams({ path: reportPath });
+
+  if (searchText) {
+    params.set('searchText', searchText);
+  }
+
+  if (searchText && searchRegex) {
+    params.set('searchRegex', 'true');
+  }
+
+  try {
+    const response = await fetch(`/api/analysis-jobs/${encodeURIComponent(jobId)}/files?${params}`);
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error?.message ?? t('unableToLoadEvidenceFile'));
+    }
+
+    if (
+      rawLogState.activeRequestId !== requestId ||
+      rawLogState.selectedPath !== reportPath ||
+      reportContent.dataset.jobId !== jobId
+    ) {
+      return;
+    }
+
+    rawLogState = {
+      ...rawLogState,
+      file: payload.file,
+      loadingPath: '',
+    };
+  } catch (error) {
+    if (
+      rawLogState.activeRequestId !== requestId ||
+      rawLogState.selectedPath !== reportPath ||
+      reportContent.dataset.jobId !== jobId
+    ) {
+      return;
+    }
+
+    rawLogState = {
+      ...rawLogState,
+      file: null,
+      loadingPath: '',
+      error: error.message,
+    };
+  }
+
+  renderReport(currentReport);
+}
+
+function searchRawLogFile() {
+  if (!rawLogState.selectedPath) {
+    return;
+  }
+
+  loadRawLogFile(rawLogState.selectedPath, {
+    searchText: rawLogState.query.trim(),
+    searchRegex: rawLogState.searchRegex,
+  });
+}
+
+function clearRawLogSearch() {
+  rawLogState = {
+    ...rawLogState,
+    query: '',
+    searchedQuery: '',
+    searchedRegex: false,
+  };
+
+  if (rawLogState.selectedPath) {
+    loadRawLogFile(rawLogState.selectedPath, { searchText: '' });
+    return;
+  }
+
+  renderReport(currentReport);
+}
+
+function renderRawLogBrowser(report) {
+  const files = rawLogFiles(report);
+
+  if (!files.length) {
+    return `<p class="empty-report">${escapeHtml(rawLogState.filesLoading ? t('loadingFile') : t('noRawLogFiles'))}</p>`;
+  }
+
+  initializeRawLogDirectoryState(report);
+
+  return `
+    <section class="raw-log-section" aria-labelledby="rawLogTitle">
+      <div class="raw-log-toolbar" aria-label="${escapeHtml(t('search'))}">
+        <input
+          type="search"
+          value="${escapeHtml(rawLogState.query)}"
+          placeholder="${escapeHtml(t('rawLogSearchPlaceholder'))}"
+          data-raw-log-search
+        />
+        <label class="raw-log-regex">
+          <input type="checkbox" data-raw-log-regex ${rawLogState.searchRegex ? 'checked' : ''} />
+          <span>${escapeHtml(t('regexSearch'))}</span>
+        </label>
+        <button class="primary-button raw-log-action-button" type="button" data-raw-log-search-button>${escapeHtml(t('search'))}</button>
+        <button class="secondary-button raw-log-action-button" type="button" data-raw-log-clear-button>${escapeHtml(t('clearSearch'))}</button>
+      </div>
+      <div class="raw-log-layout">
+        <aside class="raw-log-tree-panel" aria-label="${escapeHtml(t('rawLogTree'))}">
+          <div class="raw-log-panel-title">
+            <h4>${escapeHtml(t('rawLogTree'))}</h4>
+            <span>${escapeHtml(t('files'))}: ${files.length}${rawLogState.filesLoading ? ` · ${escapeHtml(t('loadingFile'))}` : ''}</span>
+          </div>
+          ${rawLogState.filesError ? `<p class="empty-report error-text">${escapeHtml(rawLogState.filesError)}</p>` : ''}
+          ${renderRawFileTree(files)}
+        </aside>
+        <section class="raw-log-preview-panel" aria-label="${escapeHtml(t('rawLogPreview'))}">
+          ${renderRawLogPreview()}
+        </section>
+      </div>
+    </section>
+  `;
+}
+
+function renderRawFileTree(files) {
+  const tree = buildRawFileTree(files);
+
+  return `
+    <ul class="raw-file-tree">
+      ${renderRawTreeEntries(tree)}
+    </ul>
+  `;
+}
+
+function buildRawFileTree(files) {
+  const root = { directories: new Map(), files: [] };
+
+  for (const file of [...files].sort((a, b) => a.path.localeCompare(b.path))) {
+    const parts = file.path.split('/').filter(Boolean);
+    let current = root;
+
+    for (const directory of parts.slice(0, -1)) {
+      const directoryPath = current.path ? `${current.path}/${directory}` : directory;
+
+      if (!current.directories.has(directory)) {
+        current.directories.set(directory, {
+          name: directory,
+          path: directoryPath,
+          directories: new Map(),
+          files: [],
+        });
+      }
+
+      current = current.directories.get(directory);
+    }
+
+    current.files.push({
+      ...file,
+      name: parts.at(-1) ?? file.path,
+    });
+  }
+
+  return root;
+}
+
+function renderRawTreeEntries(node) {
+  const directories = [...node.directories.values()];
+  const files = node.files;
+
+  return [
+    ...directories.map(
+      (directory) => {
+        const expanded = rawLogState.expandedDirectories.has(directory.path);
+
+        return `
+        <li class="raw-tree-directory">
+          <details data-raw-log-directory="${escapeHtml(directory.path)}"${expanded ? ' open' : ''}>
+            <summary title="${escapeHtml(directory.name)}">${escapeHtml(directory.name)}</summary>
+            <ul>${renderRawTreeEntries(directory)}</ul>
+          </details>
+        </li>
+      `;
+      },
+    ),
+    ...files.map((file) => {
+      const selected = file.path === rawLogState.selectedPath;
+
+      return `
+        <li>
+          <button
+            class="raw-tree-file${selected ? ' active' : ''}"
+            type="button"
+            title="${escapeHtml(file.path)}"
+            data-raw-log-path="${escapeHtml(file.path)}"
+          >
+            <span>${escapeHtml(file.name)}</span>
+            <small>${formatBytes(file.size)}</small>
+          </button>
+        </li>
+      `;
+    }),
+  ].join('');
+}
+
+function renderRawLogPreview() {
+  const selectedPath = rawLogState.selectedPath;
+  const file = rawLogState.file;
+  const loading = rawLogState.loadingPath === selectedPath;
+
+  return `
+    <div class="raw-log-preview-header">
+      <div>
+        <h4>${escapeHtml(t('rawLogPreview'))}</h4>
+        <p title="${escapeHtml(selectedPath)}">${escapeHtml(selectedPath || t('selectRawLogFile'))}</p>
+      </div>
+    </div>
+    ${renderRawLogPreviewBody({ file, loading })}
+  `;
+}
+
+function renderRawLogPreviewBody({ file, loading }) {
+  if (loading) {
+    return `<p class="empty-report">${escapeHtml(t('loadingEvidence'))}</p>`;
+  }
+
+  if (rawLogState.error) {
+    return `<p class="empty-report error-text">${escapeHtml(rawLogState.error)}</p>`;
+  }
+
+  if (!rawLogState.selectedPath) {
+    return `<p class="empty-report">${escapeHtml(t('selectRawLogFile'))}</p>`;
+  }
+
+  if (!file) {
+    return `<p class="empty-report">${escapeHtml(t('selectRawLogFile'))}</p>`;
+  }
+
+  const searchedQuery = rawLogState.searchedQuery.trim();
+  const searchResult = searchedQuery
+    ? file.matchedLine
+      ? t('rawLogMatch', { query: searchedQuery })
+      : t('noRawLogMatch', { query: searchedQuery })
+    : '';
+
+  if (!file.previewable) {
+    return `
+      <div class="raw-log-meta">
+        <span>${escapeHtml(formatBytes(file.size))}</span>
+      </div>
+      <p class="empty-report">${escapeHtml(file.message ?? t('fileCannotPreview'))}</p>
+    `;
+  }
+
+  return `
+    <div class="raw-log-meta">
+      <span>${escapeHtml(formatBytes(file.size))}</span>
+      ${file.lineStart ? `<span>${escapeHtml(t('linesRange', { start: file.lineStart, end: file.lineEnd }))}</span>` : ''}
+      ${file.truncated ? `<span>${escapeHtml(t('partialPreview'))}</span>` : ''}
+      ${searchResult ? `<span>${escapeHtml(searchResult)}</span>` : ''}
+    </div>
+    <div class="raw-log-code-wrap">
+      ${renderRawLogCode(file, searchedQuery, rawLogState.searchedRegex)}
+    </div>
+  `;
+}
+
+function renderRawLogCode(file, query, useRegex = false) {
+  const lines = String(file.content ?? '').split(/\r?\n/);
+  const firstLine = file.lineStart ?? 1;
+  const requestedStart = file.requestedLineStart ?? null;
+  const requestedEnd = file.requestedLineEnd ?? requestedStart;
+  const normalizedQuery = query.trim().toLowerCase();
+  const searchRegex = useRegex ? createRawLogSearchRegex(query, 'i') : null;
+
+  return lines
+    .map((line, index) => {
+      const lineNumber = firstLine + index;
+      const lineMatchesQuery =
+        normalizedQuery && (searchRegex ? searchRegex.test(line) : line.toLowerCase().includes(normalizedQuery));
+      const highlighted =
+        lineMatchesQuery ||
+        (requestedStart && lineNumber >= requestedStart && lineNumber <= requestedEnd);
+
+      return `
+        <div class="raw-log-code-line${highlighted ? ' highlighted' : ''}">
+          <span class="raw-log-line-number">${lineNumber}</span>
+          <code>${highlightRawLogLine(line, query, useRegex)}</code>
+        </div>
+      `;
+    })
+    .join('');
+}
+
+function highlightRawLogLine(line, query, useRegex = false) {
+  const text = String(line || ' ');
+  const normalizedQuery = query.trim();
+
+  if (!normalizedQuery) {
+    return escapeHtml(text);
+  }
+
+  if (useRegex) {
+    const regex = createRawLogSearchRegex(normalizedQuery, 'gi');
+
+    if (!regex) {
+      return escapeHtml(text);
+    }
+
+    let cursor = 0;
+    let output = '';
+
+    for (const match of text.matchAll(regex)) {
+      const matchText = match[0];
+      const matchIndex = match.index ?? 0;
+
+      if (!matchText) {
+        return escapeHtml(text);
+      }
+
+      output += escapeHtml(text.slice(cursor, matchIndex));
+      output += `<mark>${escapeHtml(matchText)}</mark>`;
+      cursor = matchIndex + matchText.length;
+    }
+
+    output += escapeHtml(text.slice(cursor));
+    return output || escapeHtml(text);
+  }
+
+  const lowerText = text.toLowerCase();
+  const lowerQuery = normalizedQuery.toLowerCase();
+  let cursor = 0;
+  let output = '';
+
+  while (cursor < text.length) {
+    const matchIndex = lowerText.indexOf(lowerQuery, cursor);
+
+    if (matchIndex === -1) {
+      output += escapeHtml(text.slice(cursor));
+      break;
+    }
+
+    output += escapeHtml(text.slice(cursor, matchIndex));
+    output += `<mark>${escapeHtml(text.slice(matchIndex, matchIndex + normalizedQuery.length))}</mark>`;
+    cursor = matchIndex + normalizedQuery.length;
+  }
+
+  return output || escapeHtml(text);
+}
+
+function createRawLogSearchRegex(pattern, flags) {
+  try {
+    return new RegExp(pattern, flags);
+  } catch {
+    return null;
+  }
 }
 
 function renderFindingGroups(groups, summary) {
