@@ -14,7 +14,9 @@ import {
   PORT,
   PRODUCT_OPTIONS,
   PUBLIC_DIR,
+  RULES_DIR,
 } from './config.js';
+import { validateRuntimeRules } from './analysis/ruleValidation.js';
 import { createKbEmbeddingProvider } from './kb/embeddingProviderFactory.js';
 import { KbService } from './kb/kbService.js';
 import { KbStore } from './kb/kbStore.js';
@@ -67,6 +69,21 @@ const analysisService = new AnalysisService({
 
 await storage.ensureReady();
 await kbService.ensureReady();
+const ruleValidation = await validateRuntimeRules();
+
+if (!ruleValidation.valid) {
+  logger.error('rules.validation.failed', { ruleValidation });
+  throw new Error(`Rule validation failed for ${RULES_DIR}. Run npm run validate:rules for details.`);
+}
+
+logger.info('rules.validation.ok', {
+  rulesDir: ruleValidation.rulesDir,
+  products: ruleValidation.products.map((product) => ({
+    productId: product.productId,
+    sections: product.sections,
+    warnings: product.warnings,
+  })),
+});
 await analysisService.resumePendingJobs();
 
 const server = http.createServer(async (request, response) => {
@@ -103,6 +120,11 @@ const server = http.createServer(async (request, response) => {
         allowedArchiveSuffixes: allowedArchiveSuffixes(),
         maxUploadBytes: MAX_UPLOAD_BYTES,
       });
+      return;
+    }
+
+    if (url.pathname === '/api/rules/status' && request.method === 'GET') {
+      sendJson(response, 200, { rules: await validateRuntimeRules() });
       return;
     }
 

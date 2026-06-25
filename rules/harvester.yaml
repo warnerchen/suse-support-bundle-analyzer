@@ -1,0 +1,75 @@
+logs:
+  maxFiles: 80
+  include:
+    - /logs/harvester-system/
+    - /logs/kube-system/kube-scheduler-
+    - /logs/kube-system/kube-proxy-
+    - /logs/kube-system/rke2-multus-
+    - /logs/kube-system/harvester-whereabouts-
+    - /logs/kube-system/rke2-canal-
+  priorities:
+    - pattern: /harvester-b
+      priority: 1
+    - pattern: /harvester-webhook
+      priority: 2
+    - pattern: /virt-
+      priority: 2
+    - pattern: /cdi-
+      priority: 3
+    - pattern: /harvester-network
+      priority: 4
+    - pattern: /kube-vip
+      priority: 4
+    - pattern: /kube-scheduler
+      priority: 5
+    - pattern: /kube-proxy
+      priority: 5
+  rules:
+    - id: harvester-log-webhook-errors
+      severity: warning
+      category: Harvester Logs
+      title: Harvester webhooks returned errors
+      description: Harvester or KubeVirt logs contain webhook failures. These can block node updates, VM lifecycle operations, or API admission requests.
+      regex: failed calling webhook|validator\.harvesterhci\.io|webhook.*(connection refused|bad gateway|no endpoints)|502 Bad Gateway
+      flags: i
+    - id: harvester-log-virtualization-scheduling
+      severity: warning
+      category: Virtualization
+      title: Virtualization logs contain scheduling or migration errors
+      description: KubeVirt or scheduler logs contain unschedulable, node selector, or migration-related messages that can explain VM placement failures.
+      regex: failed to mark node as unschedulable|unschedulable|nodeSelector|node selector|didn.?t match|0/\d+ nodes are available|live.?migration|migration.*failed
+      flags: i
+    - id: harvester-log-network-offload
+      severity: warning
+      category: Harvester Network
+      title: Network logs mention offload settings
+      description: Harvester network logs mention GRO, GSO, offload, or ethtool. These lines are worth reviewing when VM network throughput or packet handling is under investigation.
+      regex: \b(GRO|GSO)\b|ethtool|ChecksumOffloadBroken:true|(?:disable|disabled|enable|enabled|rx|tx).*offload|offload.*(?:disable|disabled|enable|enabled|GRO|GSO|rx|tx)
+      flags: i
+    - id: harvester-log-error-lines
+      severity: warning
+      category: Harvester Logs
+      title: Harvester platform logs contain error-level lines
+      description: One or more Harvester platform log files contain error-level messages. Review the evidence lines for the first matching files.
+      regex: \blevel=error\b|\bE\d{4}\b|Unhandled Error
+      flags: i
+
+conditions:
+  rules:
+    - id: harvester-node-{nameSlug}-{condition.typeSlug}
+      resource: harvesterNodeCondition
+      severity: warning
+      category: Harvester Node
+      title: Node {name} has {condition.type} issue
+      description: A Harvester node readiness, pressure, or cluster membership condition is not in the expected state.
+      when: condition.status != True; condition.type in Ready|EtcdIsVoter
+      evidence: Type=condition.type,Status=condition.status,Reason=condition.reason,Message=condition.message
+      severityOverrides: condition.type=Ready:critical
+    - id: harvester-node-{nameSlug}-{condition.typeSlug}
+      resource: harvesterNodeCondition
+      severity: warning
+      category: Harvester Node
+      title: Node {name} has {condition.type} issue
+      description: A Harvester node readiness, pressure, or cluster membership condition is not in the expected state.
+      when: condition.status != False; condition.type in MemoryPressure|DiskPressure|PIDPressure|NetworkUnavailable
+      evidence: Type=condition.type,Status=condition.status,Reason=condition.reason,Message=condition.message

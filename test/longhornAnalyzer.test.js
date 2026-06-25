@@ -189,6 +189,108 @@ test('returns an empty finding set when Longhorn files are absent', async () => 
   }
 });
 
+test('loads Longhorn log matching rules from YAML', async () => {
+  const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), 'longhorn-analyzer-rules-'));
+  const rulesDir = await fs.mkdtemp(path.join(os.tmpdir(), 'longhorn-rules-'));
+
+  try {
+    await writeFixtureFile(
+      rulesDir,
+      'longhorn.yaml',
+      [
+        'logs:',
+        '  rules:',
+        '    - id: custom-longhorn-log-sentinel',
+        '      severity: warning',
+        '      category: Longhorn Logs',
+        '      title: Custom Longhorn sentinel matched',
+        '      description: Custom rule loaded from YAML matched a Longhorn log line.',
+        '      regex: custom-longhorn-sentinel',
+        '      flags: i',
+      ].join('\n'),
+    );
+    await writeFixtureFile(
+      extractDir,
+      'bundle/logs/longhorn-system/longhorn-manager-a/longhorn-manager.log',
+      'time="2026-05-07T06:58:47Z" level=info msg="custom-longhorn-sentinel"',
+    );
+
+    const result = await analyzeLonghornSupportBundle({
+      extractDir,
+      index: await buildIndex(extractDir),
+      rulesDir,
+    });
+
+    const finding = result.findings.find((item) => item.id === 'custom-longhorn-log-sentinel');
+    assert.ok(finding);
+    assert.equal(finding.evidenceRefs[0].lineStart, 1);
+  } finally {
+    await fs.rm(extractDir, { recursive: true, force: true });
+    await fs.rm(rulesDir, { recursive: true, force: true });
+  }
+});
+
+test('loads Longhorn condition matching rules from YAML', async () => {
+  const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), 'longhorn-analyzer-condition-rules-'));
+  const rulesDir = await fs.mkdtemp(path.join(os.tmpdir(), 'longhorn-condition-rules-'));
+
+  try {
+    await writeFixtureFile(
+      rulesDir,
+      'longhorn.yaml',
+      [
+        'conditions:',
+        '  rules:',
+        '    - id: custom-longhorn-volume-{nameSlug}-{condition.typeSlug}',
+        '      resource: longhornVolumeCondition',
+        '      severity: critical',
+        '      category: Longhorn Volume',
+        '      title: Custom Longhorn condition for {name}',
+        '      description: Custom condition rule loaded from YAML matched a Longhorn resource condition.',
+        '      when: condition.status == True; condition.type == CustomBlocked',
+        '      evidence: Type=condition.type,Status=condition.status,Reason=condition.reason,Message=condition.message',
+      ].join('\n'),
+    );
+    await writeFixtureFile(
+      extractDir,
+      'bundle/yamls/namespaced/longhorn-system/longhorn.io/v1beta2/volumes.yaml',
+      [
+        'apiVersion: v1',
+        'items:',
+        '- apiVersion: longhorn.io/v1beta2',
+        '  kind: Volume',
+        '  metadata:',
+        '    name: volume-custom',
+        '  status:',
+        '    conditions:',
+        '    - message: custom blocker is active',
+        '      reason: CustomReason',
+        '      status: "True"',
+        '      type: CustomBlocked',
+        '    robustness: healthy',
+        '    state: attached',
+      ].join('\n'),
+    );
+
+    const result = await analyzeLonghornSupportBundle({
+      extractDir,
+      index: await buildIndex(extractDir),
+      rulesDir,
+    });
+
+    const finding = result.findings.find(
+      (item) => item.id === 'custom-longhorn-volume-volume-custom-customblocked',
+    );
+    assert.ok(finding);
+    assert.equal(finding.severity, 'critical');
+    assert.equal(finding.title, 'Custom Longhorn condition for volume-custom');
+    assert.ok(finding.evidence.includes('Reason: CustomReason'));
+  } finally {
+    await fs.rm(extractDir, { recursive: true, force: true });
+    await fs.rm(rulesDir, { recursive: true, force: true });
+  }
+});
+
 test('keeps log evidence line references aligned for sampled large log files', async () => {
   const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), 'longhorn-analyzer-large-log-'));
   const targetLine = 12050;

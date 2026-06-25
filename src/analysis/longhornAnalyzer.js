@@ -1,81 +1,150 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import {
+  buildConditionFinding,
+  findConditionRule,
+  isIncludedLogPath,
+  loadProductConditionRules,
+  loadProductLogConfig,
+  priorityForLogPath,
+} from './ruleLoader.js';
 
 const LONGHORN_RESOURCE_ROOT = 'yamls/namespaced/longhorn-system';
 const MAX_FINDINGS_PER_RULE = 10;
 const MAX_LOG_FILES = 40;
 const LOG_SAMPLE_BYTES = 256 * 1024;
 
-const NODE_TRUE_CONDITIONS = new Set([
-  'Ready',
-  'Schedulable',
-  'MountPropagation',
-  'NFSClientInstalled',
-  'RequiredPackages',
-  'KernelModulesLoaded',
-]);
+const DEFAULT_LOG_CONFIG = {
+  maxFiles: MAX_LOG_FILES,
+  include: ['/logs/longhorn-system/'],
+  priorities: [
+    { pattern: '/longhorn-manager-', priority: 1 },
+    { pattern: '/instance-manager-', priority: 2 },
+    { pattern: '/engine-image-', priority: 3 },
+    { pattern: '/csi-', priority: 4 },
+  ],
+  rules: [
+    {
+      id: 'longhorn-manager-observed-panic',
+      severity: 'critical',
+      category: 'Longhorn Logs',
+      title: 'Longhorn manager observed panics',
+      description:
+        'Longhorn manager logs contain Kubernetes runtime panic entries. This is a strong signal to inspect manager stability and the surrounding stack trace.',
+      regex: 'observed a panic|panic\\.go:\\d+|panic=',
+      flags: 'i',
+    },
+    {
+      id: 'longhorn-log-replica-scheduling-storage',
+      severity: 'warning',
+      category: 'Longhorn Logs',
+      title: 'Replica scheduling is hitting storage pressure',
+      description:
+        'Longhorn manager logs contain replica creation precheck failures related to insufficient disk space or unavailable disks.',
+      regex: 'precheck failed.*replica|insufficient storage|does not have enough storage|no disks found',
+      flags: 'i',
+    },
+    {
+      id: 'longhorn-log-csi-connection-refused',
+      severity: 'warning',
+      category: 'Longhorn Logs',
+      title: 'CSI components saw connection refused errors',
+      description:
+        'Longhorn CSI logs contain connection refused errors, which can happen while CSI sockets or sidecars are not ready.',
+      regex: '/csi/csi\\.sock.*connection refused',
+      flags: 'i',
+    },
+    {
+      id: 'longhorn-log-webhook-connection-refused',
+      severity: 'warning',
+      category: 'Longhorn Logs',
+      title: 'Longhorn webhook endpoints saw connection refused errors',
+      description:
+        'Longhorn manager logs contain failed health checks for local webhook endpoints. This can happen while conversion or admission webhooks are not ready.',
+      regex:
+        'localhost:950[12]/v1/healthz.*connection refused|failed to check endpoint https://localhost:950[12]/v1/healthz',
+      flags: 'i',
+    },
+    {
+      id: 'longhorn-log-error-lines',
+      severity: 'warning',
+      category: 'Longhorn Logs',
+      title: 'Longhorn logs contain error-level lines',
+      description:
+        'One or more Longhorn log files contain error-level messages. Review the evidence lines for the first matching files.',
+      regex: '\\blevel=error\\b|\\bE\\d{4}\\b',
+      flags: 'i',
+    },
+  ],
+};
 
-const VOLUME_TRUE_PROBLEM_CONDITIONS = new Set([
-  'Restore',
-  'TooManySnapshots',
-  'WaitForBackingImage',
-]);
-
-const REPLICA_TRUE_PROBLEM_CONDITIONS = new Set([
-  'FilesystemReadOnly',
-  'RebuildFailed',
-]);
-
-const LOG_PATTERNS = [
+const DEFAULT_CONDITION_RULES = [
   {
-    id: 'longhorn-manager-observed-panic',
-    severity: 'critical',
-    category: 'Longhorn Logs',
-    title: 'Longhorn manager observed panics',
-    description:
-      'Longhorn manager logs contain Kubernetes runtime panic entries. This is a strong signal to inspect manager stability and the surrounding stack trace.',
-    test: /observed a panic|panic\.go:\d+|panic=/i,
+    id: 'longhorn-volume-{nameSlug}-{condition.typeSlug}',
+    resource: 'longhornVolumeCondition',
+    severity: 'warning',
+    category: 'Longhorn Volume',
+    title: 'Volume {name} has {condition.type}',
+    description: 'A Longhorn volume condition that usually indicates pending work is active.',
+    when: 'condition.status == True; condition.type in Restore|TooManySnapshots|WaitForBackingImage',
+    evidence: 'Type=condition.type,Status=condition.status,Reason=condition.reason,Message=condition.message',
   },
   {
-    id: 'longhorn-log-replica-scheduling-storage',
+    id: 'longhorn-replica-{nameSlug}-{condition.typeSlug}',
+    resource: 'longhornReplicaCondition',
     severity: 'warning',
-    category: 'Longhorn Logs',
-    title: 'Replica scheduling is hitting storage pressure',
-    description:
-      'Longhorn manager logs contain replica creation precheck failures related to insufficient disk space or unavailable disks.',
-    test: /precheck failed.*replica|insufficient storage|does not have enough storage|no disks found/i,
+    category: 'Longhorn Replica',
+    title: 'Replica {name} has {condition.type}',
+    description: 'A Longhorn replica problem condition is active.',
+    when: 'condition.status == True; condition.type in FilesystemReadOnly|RebuildFailed',
+    evidence: 'Type=condition.type,Status=condition.status,Reason=condition.reason,Message=condition.message',
+    severityOverrides: 'condition.type=FilesystemReadOnly:critical',
   },
   {
-    id: 'longhorn-log-csi-connection-refused',
+    id: 'longhorn-node-{nameSlug}-{condition.typeSlug}',
+    resource: 'longhornNodeCondition',
     severity: 'warning',
-    category: 'Longhorn Logs',
-    title: 'CSI components saw connection refused errors',
-    description:
-      'Longhorn CSI logs contain connection refused errors, which can happen while CSI sockets or sidecars are not ready.',
-    test: /\/csi\/csi\.sock.*connection refused/i,
+    category: 'Longhorn Node',
+    title: 'Node {name} has {condition.type} issue',
+    description: 'A Longhorn node readiness or prerequisite condition is not satisfied.',
+    when:
+      'condition.status != True; condition.type in Ready|Schedulable|MountPropagation|NFSClientInstalled|RequiredPackages|KernelModulesLoaded',
+    evidence: 'Type=condition.type,Status=condition.status,Reason=condition.reason,Message=condition.message',
+    severityOverrides: 'condition.type=Ready:critical',
   },
   {
-    id: 'longhorn-log-webhook-connection-refused',
+    id: 'longhorn-node-{nameSlug}-{condition.typeSlug}',
+    resource: 'longhornNodeCondition',
     severity: 'warning',
-    category: 'Longhorn Logs',
-    title: 'Longhorn webhook endpoints saw connection refused errors',
-    description:
-      'Longhorn manager logs contain failed health checks for local webhook endpoints. This can happen while conversion or admission webhooks are not ready.',
-    test: /localhost:950[12]\/v1\/healthz.*connection refused|failed to check endpoint https:\/\/localhost:950[12]\/v1\/healthz/i,
+    category: 'Longhorn Node',
+    title: 'Node {name} has {condition.type} issue',
+    description: 'A Longhorn node readiness or prerequisite condition is not satisfied.',
+    when: 'condition.status != True; condition.type == Multipathd; condition.hasUsefulDetail == true',
+    evidence: 'Type=condition.type,Status=condition.status,Reason=condition.reason,Message=condition.message',
   },
   {
-    id: 'longhorn-log-error-lines',
+    id: 'longhorn-node-{nameSlug}-disk-{disk.nameSlug}-{condition.typeSlug}',
+    resource: 'longhornNodeDiskCondition',
     severity: 'warning',
-    category: 'Longhorn Logs',
-    title: 'Longhorn logs contain error-level lines',
-    description:
-      'One or more Longhorn log files contain error-level messages. Review the evidence lines for the first matching files.',
-    test: /\blevel=error\b|\bE\d{4}\b/i,
+    category: 'Longhorn Node',
+    title: 'Node {name} disk {disk.name} has {condition.type} issue',
+    description: 'A Longhorn disk readiness or scheduling condition is not satisfied.',
+    when:
+      'condition.status != True; condition.type in Ready|Schedulable|MountPropagation|NFSClientInstalled|RequiredPackages|KernelModulesLoaded',
+    evidence:
+      'Disk=disk.name,Path=disk.path,Type=condition.type,Status=condition.status,Reason=condition.reason,Message=condition.message,Storage available=disk.storageAvailable,Storage maximum=disk.storageMaximum',
+    severityOverrides: 'condition.type=Ready:critical',
   },
 ];
 
-export async function analyzeLonghornSupportBundle({ extractDir, index }) {
-  const context = { extractDir, index };
+export const LONGHORN_RULE_DEFAULTS = {
+  logs: DEFAULT_LOG_CONFIG,
+  conditions: DEFAULT_CONDITION_RULES,
+};
+
+export async function analyzeLonghornSupportBundle({ extractDir, index, rulesDir }) {
+  const conditionRules = await loadProductConditionRules('longhorn', DEFAULT_CONDITION_RULES, { rulesDir });
+  const context = { extractDir, index, rulesDir, conditionRules };
   const findings = [];
   const inventory = {
     metadata: {},
@@ -730,21 +799,15 @@ async function analyzeVolumes(context) {
     }
 
     for (const condition of extractConditions(status)) {
-      if (
-        condition.status === 'True' &&
-        VOLUME_TRUE_PROBLEM_CONDITIONS.has(condition.type)
-      ) {
-        findings.push(
-          createFinding({
-            id: `longhorn-volume-${slugify(name)}-${slugify(condition.type)}`,
-            severity: 'warning',
-            category: 'Longhorn Volume',
-            title: `Volume ${name} has ${condition.type}`,
-            description: 'A Longhorn volume condition that usually indicates pending work is active.',
-            evidence: conditionEvidence(condition),
-            path: file.reportPath,
-          }),
-        );
+      const finding = createConditionRuleFinding(
+        context,
+        'longhornVolumeCondition',
+        conditionFacts({ name, condition }),
+        file.reportPath,
+      );
+
+      if (finding) {
+        findings.push(finding);
       }
     }
   }
@@ -788,21 +851,15 @@ async function analyzeReplicas(context) {
     }
 
     for (const condition of extractConditions(status)) {
-      if (
-        condition.status === 'True' &&
-        REPLICA_TRUE_PROBLEM_CONDITIONS.has(condition.type)
-      ) {
-        findings.push(
-          createFinding({
-            id: `longhorn-replica-${slugify(name)}-${slugify(condition.type)}`,
-            severity: condition.type === 'FilesystemReadOnly' ? 'critical' : 'warning',
-            category: 'Longhorn Replica',
-            title: `Replica ${name} has ${condition.type}`,
-            description: 'A Longhorn replica problem condition is active.',
-            evidence: conditionEvidence(condition),
-            path: file.reportPath,
-          }),
-        );
+      const finding = createConditionRuleFinding(
+        context,
+        'longhornReplicaCondition',
+        conditionFacts({ name, condition }),
+        file.reportPath,
+      );
+
+      if (finding) {
+        findings.push(finding);
       }
     }
   }
@@ -835,29 +892,19 @@ async function analyzeLonghornNodes(context) {
     let nodeHasDiskProblem = false;
 
     for (const condition of extractConditions(status)) {
-      const expectedTrueProblem =
-        NODE_TRUE_CONDITIONS.has(condition.type) && condition.status !== 'True';
-      const multipathProblem =
-        condition.type === 'Multipathd' &&
-        condition.status !== 'True' &&
-        hasUsefulConditionDetail(condition);
+      const finding = createConditionRuleFinding(
+        context,
+        'longhornNodeCondition',
+        conditionFacts({ name, condition }),
+        file.reportPath,
+      );
 
-      if (!expectedTrueProblem && !multipathProblem) {
+      if (!finding) {
         continue;
       }
 
       nodeHasProblem = true;
-      findings.push(
-        createFinding({
-          id: `longhorn-node-${slugify(name)}-${slugify(condition.type)}`,
-          severity: condition.type === 'Ready' ? 'critical' : 'warning',
-          category: 'Longhorn Node',
-          title: `Node ${name} has ${condition.type} issue`,
-          description: 'A Longhorn node readiness or prerequisite condition is not satisfied.',
-          evidence: conditionEvidence(condition),
-          path: file.reportPath,
-        }),
-      );
+      findings.push(finding);
     }
 
     const diskStatuses = extractLonghornDiskStatuses(status);
@@ -865,34 +912,21 @@ async function analyzeLonghornNodes(context) {
 
     for (const disk of diskStatuses) {
       for (const condition of disk.conditions) {
-        const expectedTrueProblem =
-          NODE_TRUE_CONDITIONS.has(condition.type) && condition.status !== 'True';
+        const finding = createConditionRuleFinding(
+          context,
+          'longhornNodeDiskCondition',
+          conditionFacts({ name, condition, disk }),
+          file.reportPath,
+        );
 
-        if (!expectedTrueProblem) {
+        if (!finding) {
           continue;
         }
 
         nodeHasProblem = true;
         nodeHasDiskProblem = true;
         inventory.diskIssues += 1;
-        findings.push(
-          createFinding({
-            id: `longhorn-node-${slugify(name)}-disk-${slugify(disk.name)}-${slugify(condition.type)}`,
-            severity: condition.type === 'Ready' ? 'critical' : 'warning',
-            category: 'Longhorn Node',
-            title: `Node ${name} disk ${disk.name} has ${condition.type} issue`,
-            description:
-              'A Longhorn disk readiness or scheduling condition is not satisfied.',
-            evidence: compactEvidence([
-              `Disk: ${disk.name}`,
-              disk.path ? `Path: ${disk.path}` : null,
-              ...conditionEvidence(condition),
-              Number.isFinite(disk.storageAvailable) ? `Storage available: ${disk.storageAvailable}` : null,
-              Number.isFinite(disk.storageMaximum) ? `Storage maximum: ${disk.storageMaximum}` : null,
-            ]),
-            path: file.reportPath,
-          }),
-        );
+        findings.push(finding);
       }
     }
 
@@ -1155,20 +1189,28 @@ async function analyzeLonghornEvents(context) {
 }
 
 async function analyzeLonghornLogs(context) {
+  const logConfig = await loadProductLogConfig('longhorn', DEFAULT_LOG_CONFIG, {
+    rulesDir: context.rulesDir,
+  });
   const logEntries = context.index
     .filter(
       (entry) =>
         entry.type === 'file' &&
-        normalizeReportPath(entry.path).includes('/logs/longhorn-system/') &&
+        isIncludedLogPath(entry.path, logConfig.include) &&
         /\.(log|log\.\d+|\d+)$/.test(entry.path),
     )
-    .sort((a, b) => logPriority(a.path) - logPriority(b.path) || a.path.localeCompare(b.path))
-    .slice(0, MAX_LOG_FILES);
+    .sort(
+      (a, b) =>
+        priorityForLogPath(a.path, logConfig.priorities) -
+          priorityForLogPath(b.path, logConfig.priorities) ||
+        a.path.localeCompare(b.path),
+    )
+    .slice(0, logConfig.maxFiles);
   const inventory = {
     scannedFiles: logEntries.length,
     matchedLines: 0,
   };
-  const matchesByPattern = new Map(LOG_PATTERNS.map((pattern) => [pattern.id, {
+  const matchesByPattern = new Map(logConfig.patterns.map((pattern) => [pattern.id, {
     pattern,
     count: 0,
     evidence: [],
@@ -1569,13 +1611,35 @@ function createFindingGroup({
   };
 }
 
-function conditionEvidence(condition) {
-  return compactEvidence([
-    `Type: ${condition.type}`,
-    condition.status ? `Status: ${condition.status}` : null,
-    condition.reason ? `Reason: ${condition.reason}` : null,
-    condition.message ? `Message: ${condition.message}` : null,
-  ]);
+function conditionFacts({ name, condition, disk = null }) {
+  return {
+    name,
+    nameSlug: slugify(name),
+    'condition.type': condition.type,
+    'condition.typeSlug': slugify(condition.type),
+    'condition.status': condition.status,
+    'condition.reason': condition.reason,
+    'condition.message': condition.message,
+    'condition.hasUsefulDetail': String(hasUsefulConditionDetail(condition)),
+    'disk.name': disk?.name,
+    'disk.nameSlug': slugify(disk?.name),
+    'disk.path': disk?.path,
+    'disk.storageAvailable': Number.isFinite(disk?.storageAvailable) ? disk.storageAvailable : null,
+    'disk.storageMaximum': Number.isFinite(disk?.storageMaximum) ? disk.storageMaximum : null,
+  };
+}
+
+function createConditionRuleFinding(context, resource, facts, reportPath) {
+  const rule = findConditionRule(context.conditionRules ?? [], resource, facts);
+
+  if (!rule) {
+    return null;
+  }
+
+  return createFinding({
+    ...buildConditionFinding(rule, facts),
+    path: reportPath,
+  });
 }
 
 function hasUsefulConditionDetail(condition) {
@@ -1720,28 +1784,6 @@ function shortenReportPath(value) {
   const index = normalized.indexOf(marker);
 
   return index === -1 ? normalized : normalized.slice(index + 1);
-}
-
-function logPriority(reportPath) {
-  const normalized = normalizeReportPath(reportPath);
-
-  if (normalized.includes('/longhorn-manager-')) {
-    return 0;
-  }
-
-  if (normalized.includes('/instance-manager-')) {
-    return 1;
-  }
-
-  if (normalized.includes('/engine-image-')) {
-    return 2;
-  }
-
-  if (normalized.includes('/csi-')) {
-    return 3;
-  }
-
-  return 4;
 }
 
 function cleanScalar(value) {

@@ -1,0 +1,95 @@
+logs:
+  maxFiles: 40
+  include:
+    - /logs/longhorn-system/
+  priorities:
+    - pattern: /longhorn-manager-
+      priority: 1
+    - pattern: /instance-manager-
+      priority: 2
+    - pattern: /engine-image-
+      priority: 3
+    - pattern: /csi-
+      priority: 4
+  rules:
+    - id: longhorn-manager-observed-panic
+      severity: critical
+      category: Longhorn Logs
+      title: Longhorn manager observed panics
+      description: Longhorn manager logs contain Kubernetes runtime panic entries. This is a strong signal to inspect manager stability and the surrounding stack trace.
+      regex: observed a panic|panic\.go:\d+|panic=
+      flags: i
+    - id: longhorn-log-replica-scheduling-storage
+      severity: warning
+      category: Longhorn Logs
+      title: Replica scheduling is hitting storage pressure
+      description: Longhorn manager logs contain replica creation precheck failures related to insufficient disk space or unavailable disks.
+      regex: precheck failed.*replica|insufficient storage|does not have enough storage|no disks found
+      flags: i
+    - id: longhorn-log-csi-connection-refused
+      severity: warning
+      category: Longhorn Logs
+      title: CSI components saw connection refused errors
+      description: Longhorn CSI logs contain connection refused errors, which can happen while CSI sockets or sidecars are not ready.
+      regex: /csi/csi\.sock.*connection refused
+      flags: i
+    - id: longhorn-log-webhook-connection-refused
+      severity: warning
+      category: Longhorn Logs
+      title: Longhorn webhook endpoints saw connection refused errors
+      description: Longhorn manager logs contain failed health checks for local webhook endpoints. This can happen while conversion or admission webhooks are not ready.
+      regex: localhost:950[12]/v1/healthz.*connection refused|failed to check endpoint https://localhost:950[12]/v1/healthz
+      flags: i
+    - id: longhorn-log-error-lines
+      severity: warning
+      category: Longhorn Logs
+      title: Longhorn logs contain error-level lines
+      description: One or more Longhorn log files contain error-level messages. Review the evidence lines for the first matching files.
+      regex: \blevel=error\b|\bE\d{4}\b
+      flags: i
+
+conditions:
+  rules:
+    - id: longhorn-volume-{nameSlug}-{condition.typeSlug}
+      resource: longhornVolumeCondition
+      severity: warning
+      category: Longhorn Volume
+      title: Volume {name} has {condition.type}
+      description: A Longhorn volume condition that usually indicates pending work is active.
+      when: condition.status == True; condition.type in Restore|TooManySnapshots|WaitForBackingImage
+      evidence: Type=condition.type,Status=condition.status,Reason=condition.reason,Message=condition.message
+    - id: longhorn-replica-{nameSlug}-{condition.typeSlug}
+      resource: longhornReplicaCondition
+      severity: warning
+      category: Longhorn Replica
+      title: Replica {name} has {condition.type}
+      description: A Longhorn replica problem condition is active.
+      when: condition.status == True; condition.type in FilesystemReadOnly|RebuildFailed
+      evidence: Type=condition.type,Status=condition.status,Reason=condition.reason,Message=condition.message
+      severityOverrides: condition.type=FilesystemReadOnly:critical
+    - id: longhorn-node-{nameSlug}-{condition.typeSlug}
+      resource: longhornNodeCondition
+      severity: warning
+      category: Longhorn Node
+      title: Node {name} has {condition.type} issue
+      description: A Longhorn node readiness or prerequisite condition is not satisfied.
+      when: condition.status != True; condition.type in Ready|Schedulable|MountPropagation|NFSClientInstalled|RequiredPackages|KernelModulesLoaded
+      evidence: Type=condition.type,Status=condition.status,Reason=condition.reason,Message=condition.message
+      severityOverrides: condition.type=Ready:critical
+    - id: longhorn-node-{nameSlug}-{condition.typeSlug}
+      resource: longhornNodeCondition
+      severity: warning
+      category: Longhorn Node
+      title: Node {name} has {condition.type} issue
+      description: A Longhorn node readiness or prerequisite condition is not satisfied.
+      when: condition.status != True; condition.type == Multipathd; condition.hasUsefulDetail == true
+      evidence: Type=condition.type,Status=condition.status,Reason=condition.reason,Message=condition.message
+    - id: longhorn-node-{nameSlug}-disk-{disk.nameSlug}-{condition.typeSlug}
+      resource: longhornNodeDiskCondition
+      severity: warning
+      category: Longhorn Node
+      title: Node {name} disk {disk.name} has {condition.type} issue
+      description: A Longhorn disk readiness or scheduling condition is not satisfied.
+      when: condition.status != True; condition.type in Ready|Schedulable|MountPropagation|NFSClientInstalled|RequiredPackages|KernelModulesLoaded
+      evidence: Disk=disk.name,Path=disk.path,Type=condition.type,Status=condition.status,Reason=condition.reason,Message=condition.message,Storage available=disk.storageAvailable,Storage maximum=disk.storageMaximum
+      severityOverrides: condition.type=Ready:critical

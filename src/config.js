@@ -21,6 +21,9 @@ export const ANALYSIS_WORK_DIR = process.env.ANALYSIS_WORK_DIR
 export const KB_STORAGE_DIR = process.env.KB_STORAGE_DIR
   ? path.resolve(process.env.KB_STORAGE_DIR)
   : path.join(DATA_DIR, 'kb');
+export const RULES_DIR = process.env.RULES_DIR
+  ? path.resolve(process.env.RULES_DIR)
+  : path.join(PROJECT_ROOT, 'rules');
 export const KB_EMBEDDING_PROVIDER = normalizeEmbeddingProvider(process.env.KB_EMBEDDING_PROVIDER);
 export const KB_VECTOR_STORE = normalizeVectorStore(process.env.KB_VECTOR_STORE);
 export const AI_ADVISOR_PROVIDER = normalizeAiAdvisorProvider(process.env.AI_ADVISOR_PROVIDER);

@@ -1,6 +1,14 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { analyzeLonghornSupportBundle } from './longhornAnalyzer.js';
+import {
+  buildConditionFinding,
+  findConditionRule,
+  isIncludedLogPath,
+  loadProductConditionRules,
+  loadProductLogConfig,
+  priorityForLogPath,
+} from './ruleLoader.js';
 
 const HARVESTER_RESOURCE_ROOT = 'yamls/namespaced/harvester-system';
 const MAX_FINDINGS_PER_RULE = 12;
@@ -14,7 +22,6 @@ const WORKLOAD_LOG_FINDING_IDS = new Set([
   'harvester-log-network-offload',
 ]);
 
-const NODE_TRUE_CONDITIONS = new Set(['Ready', 'EtcdIsVoter']);
 const NODE_FALSE_CONDITIONS = new Set([
   'MemoryPressure',
   'DiskPressure',
@@ -22,47 +29,107 @@ const NODE_FALSE_CONDITIONS = new Set([
   'NetworkUnavailable',
 ]);
 
-const LOG_PATTERNS = [
+const DEFAULT_LOG_CONFIG = {
+  maxFiles: MAX_LOG_FILES,
+  include: [
+    '/logs/harvester-system/',
+    '/logs/kube-system/kube-scheduler-',
+    '/logs/kube-system/kube-proxy-',
+    '/logs/kube-system/rke2-multus-',
+    '/logs/kube-system/harvester-whereabouts-',
+    '/logs/kube-system/rke2-canal-',
+  ],
+  priorities: [
+    { pattern: '/harvester-b', priority: 1 },
+    { pattern: '/harvester-webhook', priority: 2 },
+    { pattern: '/virt-', priority: 2 },
+    { pattern: '/cdi-', priority: 3 },
+    { pattern: '/harvester-network', priority: 4 },
+    { pattern: '/kube-vip', priority: 4 },
+    { pattern: '/kube-scheduler', priority: 5 },
+    { pattern: '/kube-proxy', priority: 5 },
+  ],
+  rules: [
+    {
+      id: 'harvester-log-webhook-errors',
+      severity: 'warning',
+      category: 'Harvester Logs',
+      title: 'Harvester webhooks returned errors',
+      description:
+        'Harvester or KubeVirt logs contain webhook failures. These can block node updates, VM lifecycle operations, or API admission requests.',
+      regex:
+        'failed calling webhook|validator\\.harvesterhci\\.io|webhook.*(connection refused|bad gateway|no endpoints)|502 Bad Gateway',
+      flags: 'i',
+    },
+    {
+      id: 'harvester-log-virtualization-scheduling',
+      severity: 'warning',
+      category: 'Virtualization',
+      title: 'Virtualization logs contain scheduling or migration errors',
+      description:
+        'KubeVirt or scheduler logs contain unschedulable, node selector, or migration-related messages that can explain VM placement failures.',
+      regex:
+        'failed to mark node as unschedulable|unschedulable|nodeSelector|node selector|didn.?t match|0/\\d+ nodes are available|live.?migration|migration.*failed',
+      flags: 'i',
+    },
+    {
+      id: 'harvester-log-network-offload',
+      severity: 'warning',
+      category: 'Harvester Network',
+      title: 'Network logs mention offload settings',
+      description:
+        'Harvester network logs mention GRO, GSO, offload, or ethtool. These lines are worth reviewing when VM network throughput or packet handling is under investigation.',
+      regex:
+        '\\b(GRO|GSO)\\b|ethtool|ChecksumOffloadBroken:true|(?:disable|disabled|enable|enabled|rx|tx).*offload|offload.*(?:disable|disabled|enable|enabled|GRO|GSO|rx|tx)',
+      flags: 'i',
+    },
+    {
+      id: 'harvester-log-error-lines',
+      severity: 'warning',
+      category: 'Harvester Logs',
+      title: 'Harvester platform logs contain error-level lines',
+      description:
+        'One or more Harvester platform log files contain error-level messages. Review the evidence lines for the first matching files.',
+      regex: '\\blevel=error\\b|\\bE\\d{4}\\b|Unhandled Error',
+      flags: 'i',
+    },
+  ],
+};
+
+const DEFAULT_CONDITION_RULES = [
   {
-    id: 'harvester-log-webhook-errors',
+    id: 'harvester-node-{nameSlug}-{condition.typeSlug}',
+    resource: 'harvesterNodeCondition',
     severity: 'warning',
-    category: 'Harvester Logs',
-    title: 'Harvester webhooks returned errors',
+    category: 'Harvester Node',
+    title: 'Node {name} has {condition.type} issue',
     description:
-      'Harvester or KubeVirt logs contain webhook failures. These can block node updates, VM lifecycle operations, or API admission requests.',
-    test: /failed calling webhook|validator\.harvesterhci\.io|webhook.*(connection refused|bad gateway|no endpoints)|502 Bad Gateway/i,
+      'A Harvester node readiness, pressure, or cluster membership condition is not in the expected state.',
+    when: 'condition.status != True; condition.type in Ready|EtcdIsVoter',
+    evidence: 'Type=condition.type,Status=condition.status,Reason=condition.reason,Message=condition.message',
+    severityOverrides: 'condition.type=Ready:critical',
   },
   {
-    id: 'harvester-log-virtualization-scheduling',
+    id: 'harvester-node-{nameSlug}-{condition.typeSlug}',
+    resource: 'harvesterNodeCondition',
     severity: 'warning',
-    category: 'Virtualization',
-    title: 'Virtualization logs contain scheduling or migration errors',
+    category: 'Harvester Node',
+    title: 'Node {name} has {condition.type} issue',
     description:
-      'KubeVirt or scheduler logs contain unschedulable, node selector, or migration-related messages that can explain VM placement failures.',
-    test: /failed to mark node as unschedulable|unschedulable|nodeSelector|node selector|didn.?t match|0\/\d+ nodes are available|live.?migration|migration.*failed/i,
-  },
-  {
-    id: 'harvester-log-network-offload',
-    severity: 'warning',
-    category: 'Harvester Network',
-    title: 'Network logs mention offload settings',
-    description:
-      'Harvester network logs mention GRO, GSO, offload, or ethtool. These lines are worth reviewing when VM network throughput or packet handling is under investigation.',
-    test: /\b(GRO|GSO)\b|ethtool|ChecksumOffloadBroken:true|(?:disable|disabled|enable|enabled|rx|tx).*offload|offload.*(?:disable|disabled|enable|enabled|GRO|GSO|rx|tx)/i,
-  },
-  {
-    id: 'harvester-log-error-lines',
-    severity: 'warning',
-    category: 'Harvester Logs',
-    title: 'Harvester platform logs contain error-level lines',
-    description:
-      'One or more Harvester platform log files contain error-level messages. Review the evidence lines for the first matching files.',
-    test: /\blevel=error\b|\bE\d{4}\b|Unhandled Error/i,
+      'A Harvester node readiness, pressure, or cluster membership condition is not in the expected state.',
+    when: 'condition.status != False; condition.type in MemoryPressure|DiskPressure|PIDPressure|NetworkUnavailable',
+    evidence: 'Type=condition.type,Status=condition.status,Reason=condition.reason,Message=condition.message',
   },
 ];
 
-export async function analyzeHarvesterSupportBundle({ extractDir, index }) {
-  const context = { extractDir, index };
+export const HARVESTER_RULE_DEFAULTS = {
+  logs: DEFAULT_LOG_CONFIG,
+  conditions: DEFAULT_CONDITION_RULES,
+};
+
+export async function analyzeHarvesterSupportBundle({ extractDir, index, rulesDir }) {
+  const conditionRules = await loadProductConditionRules('harvester', DEFAULT_CONDITION_RULES, { rulesDir });
+  const context = { extractDir, index, rulesDir, conditionRules };
   const findings = [];
   const inventory = {
     metadata: {},
@@ -598,9 +665,14 @@ async function analyzeClusterNodes(context) {
     let nodeHasIssue = false;
 
     for (const condition of conditions) {
-      const expectedStatus = expectedNodeConditionStatus(condition.type);
+      const finding = createConditionRuleFinding(
+        context,
+        'harvesterNodeCondition',
+        conditionFacts({ name, condition }),
+        file.reportPath,
+      );
 
-      if (!expectedStatus || condition.status === expectedStatus) {
+      if (!finding) {
         continue;
       }
 
@@ -612,17 +684,7 @@ async function analyzeClusterNodes(context) {
         inventory.pressure += 1;
       }
 
-      findings.push(
-        createFinding({
-          id: `harvester-node-${slugify(name)}-${slugify(condition.type)}`,
-          severity: condition.type === 'Ready' ? 'critical' : 'warning',
-          category: 'Harvester Node',
-          title: `Node ${name} has ${condition.type} issue`,
-          description: 'A Harvester node readiness, pressure, or cluster membership condition is not in the expected state.',
-          evidence: conditionEvidence(condition),
-          path: file.reportPath,
-        }),
-      );
+      findings.push(finding);
     }
 
     const ntpStatus = extractNtpStatus(metadata);
@@ -1829,15 +1891,23 @@ async function analyzeHarvesterEvents(context) {
 }
 
 async function analyzeHarvesterLogs(context) {
+  const logConfig = await loadProductLogConfig('harvester', DEFAULT_LOG_CONFIG, {
+    rulesDir: context.rulesDir,
+  });
   const logEntries = context.index
-    .filter((entry) => entry.type === 'file' && isHarvesterLogPath(entry.path))
-    .sort((a, b) => logPriority(a.path) - logPriority(b.path) || a.path.localeCompare(b.path))
-    .slice(0, MAX_LOG_FILES);
+    .filter((entry) => entry.type === 'file' && isHarvesterLogPath(entry.path, logConfig))
+    .sort(
+      (a, b) =>
+        priorityForLogPath(a.path, logConfig.priorities) -
+          priorityForLogPath(b.path, logConfig.priorities) ||
+        a.path.localeCompare(b.path),
+    )
+    .slice(0, logConfig.maxFiles);
   const inventory = {
     scannedFiles: logEntries.length,
     matchedLines: 0,
   };
-  const matchesByPattern = new Map(LOG_PATTERNS.map((pattern) => [pattern.id, {
+  const matchesByPattern = new Map(logConfig.patterns.map((pattern) => [pattern.id, {
     pattern,
     count: 0,
     evidence: [],
@@ -2509,56 +2579,14 @@ function readInlineListScalar(line, target, onKey = () => undefined) {
   onKey(match[1]);
 }
 
-function expectedNodeConditionStatus(type) {
-  if (NODE_TRUE_CONDITIONS.has(type)) {
-    return 'True';
-  }
-
-  if (NODE_FALSE_CONDITIONS.has(type)) {
-    return 'False';
-  }
-
-  return null;
-}
-
-function isHarvesterLogPath(reportPath) {
+function isHarvesterLogPath(reportPath, logConfig) {
   const normalized = normalizeReportPath(reportPath);
 
   if (!/\.(log|log\.\d+|\d+)$/.test(normalized)) {
     return false;
   }
 
-  if (normalized.includes('/logs/harvester-system/')) {
-    return true;
-  }
-
-  return /\/logs\/kube-system\/(kube-scheduler|kube-proxy|rke2-multus|harvester-whereabouts|rke2-canal)-/.test(normalized);
-}
-
-function logPriority(reportPath) {
-  const normalized = normalizeReportPath(reportPath);
-
-  if (normalized.includes('/harvester-b')) {
-    return 0;
-  }
-
-  if (normalized.includes('/harvester-webhook') || normalized.includes('/virt-')) {
-    return 1;
-  }
-
-  if (normalized.includes('/cdi-')) {
-    return 2;
-  }
-
-  if (normalized.includes('/harvester-network') || normalized.includes('/kube-vip')) {
-    return 3;
-  }
-
-  if (normalized.includes('/kube-scheduler') || normalized.includes('/kube-proxy')) {
-    return 4;
-  }
-
-  return 5;
+  return isIncludedLogPath(normalized, logConfig.include);
 }
 
 function createVersionCandidate({ version, component, source, priority }) {
@@ -2655,13 +2683,29 @@ function createFindingGroup({
   };
 }
 
-function conditionEvidence(condition) {
-  return compactEvidence([
-    `Type: ${condition.type}`,
-    condition.status ? `Status: ${condition.status}` : null,
-    condition.reason ? `Reason: ${condition.reason}` : null,
-    condition.message ? `Message: ${condition.message}` : null,
-  ]);
+function conditionFacts({ name, condition }) {
+  return {
+    name,
+    nameSlug: slugify(name),
+    'condition.type': condition.type,
+    'condition.typeSlug': slugify(condition.type),
+    'condition.status': condition.status,
+    'condition.reason': condition.reason,
+    'condition.message': condition.message,
+  };
+}
+
+function createConditionRuleFinding(context, resource, facts, reportPath) {
+  const rule = findConditionRule(context.conditionRules ?? [], resource, facts);
+
+  if (!rule) {
+    return null;
+  }
+
+  return createFinding({
+    ...buildConditionFinding(rule, facts),
+    path: reportPath,
+  });
 }
 
 function compactEvidence(values) {

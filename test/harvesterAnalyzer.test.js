@@ -452,6 +452,105 @@ test('builds Harvester findings from support bundle files', async () => {
   }
 });
 
+test('loads Harvester log matching rules from YAML', async () => {
+  const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), 'harvester-analyzer-rules-'));
+  const rulesDir = await fs.mkdtemp(path.join(os.tmpdir(), 'harvester-rules-'));
+
+  try {
+    await writeFixtureFile(
+      rulesDir,
+      'harvester.yaml',
+      [
+        'logs:',
+        '  rules:',
+        '    - id: custom-harvester-log-sentinel',
+        '      severity: warning',
+        '      category: Harvester Logs',
+        '      title: Custom Harvester sentinel matched',
+        '      description: Custom rule loaded from YAML matched a Harvester log line.',
+        '      regex: custom-harvester-sentinel',
+        '      flags: i',
+      ].join('\n'),
+    );
+    await writeFixtureFile(
+      extractDir,
+      'bundle/logs/harvester-system/harvester-webhook-a/harvester-webhook.log',
+      'time="2026-05-20T15:35:29Z" level=info msg="custom-harvester-sentinel"',
+    );
+
+    const result = await analyzeHarvesterSupportBundle({
+      extractDir,
+      index: await buildIndex(extractDir),
+      rulesDir,
+    });
+
+    const finding = result.findings.find((item) => item.id === 'custom-harvester-log-sentinel');
+    assert.ok(finding);
+    assert.equal(finding.evidenceRefs[0].lineStart, 1);
+  } finally {
+    await fs.rm(extractDir, { recursive: true, force: true });
+    await fs.rm(rulesDir, { recursive: true, force: true });
+  }
+});
+
+test('loads Harvester condition matching rules from YAML', async () => {
+  const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), 'harvester-analyzer-condition-rules-'));
+  const rulesDir = await fs.mkdtemp(path.join(os.tmpdir(), 'harvester-condition-rules-'));
+
+  try {
+    await writeFixtureFile(
+      rulesDir,
+      'harvester.yaml',
+      [
+        'conditions:',
+        '  rules:',
+        '    - id: custom-harvester-node-{nameSlug}-{condition.typeSlug}',
+        '      resource: harvesterNodeCondition',
+        '      severity: warning',
+        '      category: Harvester Node',
+        '      title: Custom Harvester condition for {name}',
+        '      description: Custom condition rule loaded from YAML matched a Harvester node condition.',
+        '      when: condition.status == True; condition.type == CustomPressure',
+        '      evidence: Type=condition.type,Status=condition.status,Reason=condition.reason,Message=condition.message',
+      ].join('\n'),
+    );
+    await writeFixtureFile(
+      extractDir,
+      'bundle/yamls/cluster/v1/nodes.yaml',
+      [
+        'apiVersion: v1',
+        'items:',
+        '- apiVersion: v1',
+        '  kind: Node',
+        '  metadata:',
+        '    name: node-custom',
+        '  status:',
+        '    conditions:',
+        '    - message: custom pressure is active',
+        '      reason: CustomReason',
+        '      status: "True"',
+        '      type: CustomPressure',
+      ].join('\n'),
+    );
+
+    const result = await analyzeHarvesterSupportBundle({
+      extractDir,
+      index: await buildIndex(extractDir),
+      rulesDir,
+    });
+
+    const finding = result.findings.find(
+      (item) => item.id === 'custom-harvester-node-node-custom-custompressure',
+    );
+    assert.ok(finding);
+    assert.equal(finding.title, 'Custom Harvester condition for node-custom');
+    assert.ok(finding.evidence.includes('Message: custom pressure is active'));
+  } finally {
+    await fs.rm(extractDir, { recursive: true, force: true });
+    await fs.rm(rulesDir, { recursive: true, force: true });
+  }
+});
+
 test('returns an empty finding set when Harvester files are absent', async () => {
   const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), 'harvester-analyzer-empty-'));
 
